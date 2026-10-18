@@ -1,0 +1,359 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Just One</title>
+<style>
+  *{box-sizing:border-box}
+  body{margin:0;font-family:system-ui,-apple-system,sans-serif;background:#f4efe6;color:#222}
+  main{max-width:460px;margin:0 auto;padding:20px}
+  h1{text-align:center;margin:8px 0 16px}
+  .card{background:#fff;border-radius:14px;padding:16px;margin:12px 0;box-shadow:0 2px 8px #0001}
+  input,select,textarea{width:100%;padding:12px;font-size:17px;font-family:inherit;border:2px solid #ccc;border-radius:10px;margin:6px 0;background:#fff}
+  textarea{resize:vertical}
+  label{display:block;font-size:14px;color:#555;margin-top:8px}
+  button{width:100%;padding:12px;font-size:17px;border:0;border-radius:10px;background:#2d6cdf;color:#fff;margin:6px 0;cursor:pointer}
+  button.alt{background:#777}
+  button.link{background:none;color:#777;font-size:14px;text-decoration:underline;width:auto;display:block;margin:12px auto}
+  button:disabled{background:#bbb;cursor:default}
+  hr{border:0;border-top:1px solid #ddd;margin:14px 0}
+  .big{font-size:28px;font-weight:700;text-align:center;letter-spacing:1px;margin:8px 0}
+  .muted{color:#777;font-size:14px}
+  .center{text-align:center}
+  .row{display:flex;justify-content:space-between;font-weight:600}
+  .qr{display:block;margin:10px auto;width:220px;height:220px}
+  ul{list-style:none;padding:0;margin:6px 0 0}
+  li{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #eee;gap:8px}
+  .dup{text-decoration:line-through;color:#bbb}
+  .err{color:#c0392b;min-height:22px;text-align:center}
+  .conn{background:#c0392b;color:#fff;text-align:center;padding:8px;font-size:14px}
+  .bar{height:10px;background:#eee;border-radius:6px;overflow:hidden;margin-top:8px}
+  #timerFill{height:100%;width:100%;background:#2d6cdf;transition:width .25s linear}
+  #timerCard.urgent #timerFill{background:#c0392b}
+  #timerCard.urgent #timerText{color:#c0392b}
+  .hidden{display:none!important}
+</style>
+</head>
+<body>
+<div id="conn" class="conn hidden">Connection lost. Reconnecting…</div>
+<main>
+  <h1>Just One</h1>
+  <div id="err" class="err"></div>
+
+  <section id="home" class="card">
+    <input id="name" placeholder="Your name" maxlength="20" autocomplete="off">
+    <button id="createBtn">Create a room</button>
+    <hr>
+    <input id="code" placeholder="Room code" maxlength="4" autocomplete="off" style="text-transform:uppercase">
+    <button id="joinBtn" class="alt">Join a room</button>
+  </section>
+
+  <section id="lobby" class="hidden">
+    <div class="card center">
+      <div class="muted">Scan to join</div>
+      <img id="qr" class="qr" alt="Join QR code">
+      <div class="big" id="lobbyCode"></div>
+    </div>
+    <div class="card">
+      <div class="muted">Players (need at least 3)</div>
+      <ul id="lobbyPlayers"></ul>
+    </div>
+    <div class="card" id="settings">
+      <div class="muted">Game settings</div>
+      <label for="clueSecs">Clue timer</label>
+      <select id="clueSecs">
+        <option value="0">Off</option>
+        <option value="30">30 seconds</option>
+        <option value="45">45 seconds</option>
+        <option value="60">60 seconds</option>
+        <option value="90">90 seconds</option>
+      </select>
+      <label for="wordMode">Word list</label>
+      <select id="wordMode">
+        <option value="builtin">Built-in words</option>
+        <option value="custom">My words only</option>
+        <option value="both">Built-in + my words</option>
+      </select>
+      <textarea id="customWords" rows="4" placeholder="Your own words: one per line, or separated by commas"></textarea>
+      <div class="muted" id="wordCount"></div>
+    </div>
+    <div class="card muted center" id="settingsView"></div>
+    <button id="startBtn">Start game</button>
+    <p class="muted center" id="lobbyHint"></p>
+  </section>
+
+  <section id="game" class="hidden">
+    <div class="card row"><span id="roundInfo"></span><span id="scoreInfo"></span></div>
+    <div class="card hidden" id="timerCard">
+      <div class="row"><span>Time left</span><span id="timerText"></span></div>
+      <div class="bar"><div id="timerFill"></div></div>
+    </div>
+    <div class="card" id="roleBox"></div>
+    <div class="card" id="cluesBox"></div>
+    <div class="card">
+      <div class="muted">Players</div>
+      <ul id="gamePlayers"></ul>
+    </div>
+  </section>
+
+  <button id="leaveBtn" class="link hidden">Leave room</button>
+</main>
+
+<script src="/socket.io/socket.io.js"></script>
+<script>
+  const socket = io();
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[c]));
+
+  // Browser storage can be unavailable (private mode), so every access is guarded.
+  const store = {
+    get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+    set(k, v) { try { localStorage.setItem(k, v); } catch {} },
+    del(k) { try { localStorage.removeItem(k); } catch {} },
+  };
+
+  // ?slot=2 gives a separate identity, handy for testing several players in one browser.
+  const params = new URLSearchParams(location.search);
+  const slot = params.get("slot") || "";
+  const pidKey = "jo_pid" + slot, roomKey = "jo_room" + slot, nameKey = "jo_name" + slot;
+
+  let pid = store.get(pidKey);
+  if (!pid) {
+    const a = new Uint8Array(16);
+    crypto.getRandomValues(a);
+    pid = Array.from(a, (b) => b.toString(16).padStart(2, "0")).join("");
+    store.set(pidKey, pid);
+  }
+
+  let st = null;
+  let phaseKey = "";
+  let autoSentRound = 0;
+
+  const showErr = (msg) => { $("err").textContent = msg || ""; };
+
+  if (params.get("room")) $("code").value = params.get("room").toUpperCase();
+  const savedName = store.get(nameKey);
+  if (savedName) $("name").value = savedName;
+
+  function showHome() {
+    st = null;
+    phaseKey = "";
+    ["lobby", "game", "leaveBtn"].forEach((id) => $(id).classList.add("hidden"));
+    $("home").classList.remove("hidden");
+  }
+
+  const currentSettings = () => ({
+    clueSeconds: Number($("clueSecs").value),
+    wordMode: $("wordMode").value,
+    customWords: $("customWords").value,
+  });
+  const pushSettings = () => socket.emit("settings", currentSettings());
+
+  const handlers = {
+    createBtn: () => {
+      store.set(nameKey, $("name").value.trim());
+      socket.emit("create", { name: $("name").value, pid }, (res) => { if (!res.ok) showErr(res.error); });
+    },
+    joinBtn: () => {
+      store.set(nameKey, $("name").value.trim());
+      socket.emit("join", { code: $("code").value, name: $("name").value, pid }, (res) => { if (!res.ok) showErr(res.error); });
+    },
+    startBtn: () => socket.emit("start", { settings: currentSettings() }, (res) => {
+      if (res && !res.ok) showErr(res.error);
+    }),
+    clueBtn: () => { const t = $("clueIn")?.value.trim(); if (t) socket.emit("clue", { text: t }); },
+    guessBtn: () => { const t = $("guessIn")?.value.trim(); if (t) socket.emit("guess", { text: t }); },
+    nextBtn: () => socket.emit("next"),
+    skipBtn: () => socket.emit("skip"),
+    resetBtn: () => socket.emit("reset"),
+    leaveBtn: () => {
+      if (!confirm("Leave this room?")) return;
+      socket.emit("leave");
+      store.del(roomKey);
+      history.replaceState(null, "", location.pathname + (slot ? "?slot=" + slot : ""));
+      $("code").value = "";
+      showHome();
+    },
+  };
+
+  document.body.addEventListener("click", (e) => {
+    const b = e.target.closest("button");
+    if (b && handlers[b.id]) handlers[b.id]();
+  });
+  document.body.addEventListener("change", (e) => {
+    if (["clueSecs", "wordMode", "customWords"].includes(e.target.id)) pushSettings();
+  });
+  document.body.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter") return;
+    if (e.target.id === "clueIn") handlers.clueBtn();
+    else if (e.target.id === "guessIn") handlers.guessBtn();
+    else if (e.target.id === "code") handlers.joinBtn();
+  });
+
+  // On every (re)connect, try to take our old seat back.
+  socket.on("connect", () => {
+    $("conn").classList.add("hidden");
+    const code = (params.get("room") || store.get(roomKey) || "").toUpperCase();
+    if (!code) return;
+    socket.emit("rejoin", { code, pid }, (res) => {
+      if (res && res.ok) return;
+      if (st || store.get(roomKey) === code) store.del(roomKey);
+      if (st) showHome();
+    });
+  });
+  socket.on("disconnect", () => $("conn").classList.remove("hidden"));
+
+  socket.on("state", (s) => {
+    s.endAt = s.msLeft == null ? null : Date.now() + s.msLeft;
+    st = s;
+    store.set(roomKey, s.code);
+    render();
+  });
+
+  function render() {
+    if (!st) return;
+    showErr("");
+    $("home").classList.add("hidden");
+    $("leaveBtn").classList.remove("hidden");
+    $("lobby").classList.toggle("hidden", st.status !== "lobby");
+    $("game").classList.toggle("hidden", st.status === "lobby");
+    if (st.status === "lobby") renderLobby();
+    else renderGame();
+  }
+
+  function setIfIdle(id, v) {
+    const el = $(id);
+    if (document.activeElement !== el) el.value = v;
+  }
+
+  function renderLobby() {
+    $("qr").src = st.qr;
+    $("lobbyCode").textContent = "Room " + st.code;
+    $("lobbyPlayers").innerHTML = st.players.map((p) =>
+      `<li><span>${esc(p.name)}${p.id === st.meId ? " (you)" : ""}${p.connected ? "" : " (offline)"}</span>` +
+      `<span class="muted">${p.id === st.hostId ? "host" : ""}</span></li>`
+    ).join("");
+
+    const s = st.settings;
+    $("settings").classList.toggle("hidden", !st.isHost);
+    $("settingsView").classList.toggle("hidden", st.isHost);
+    if (st.isHost) {
+      setIfIdle("clueSecs", String(s.clueSeconds));
+      setIfIdle("wordMode", s.wordMode);
+      setIfIdle("customWords", s.customWords.join("\n"));
+    }
+    const rounds = `${st.maxRounds} round${st.maxRounds === 1 ? "" : "s"}`;
+    $("wordCount").textContent = `${st.poolSize} words available · ${rounds}`;
+    const modeTxt = { builtin: "built-in words", custom: "host's own words", both: "built-in + host's words" }[s.wordMode];
+    $("settingsView").textContent =
+      `${s.clueSeconds ? s.clueSeconds + "s clue timer" : "No clue timer"} · ${modeTxt} · ${rounds}`;
+
+    const enough = st.players.filter((p) => p.connected).length >= 3;
+    $("startBtn").classList.toggle("hidden", !st.isHost);
+    $("startBtn").disabled = !enough;
+    $("lobbyHint").textContent = st.isHost
+      ? (enough ? "" : "Waiting for more players to join…")
+      : "Waiting for the host to start…";
+  }
+
+  function renderGame() {
+    $("roundInfo").textContent = `Round ${st.round} of ${st.maxRounds}`;
+    $("scoreInfo").textContent = `Score ${st.score}`;
+    const me = st.players.find((p) => p.id === st.meId) || {};
+    const key = [st.status, st.round, st.isGuesser, st.isHost, me.submitted, st.word, st.result?.guess].join("|");
+    // Only rebuild the input area when the phase changes, so typing isn't wiped by other players' updates.
+    if (key !== phaseKey) {
+      phaseKey = key;
+      $("roleBox").innerHTML = roleHTML(me);
+    }
+    renderClues();
+    renderPlayers();
+  }
+
+  function roleHTML(me) {
+    const hostSkip = st.isHost && ["clue", "guess"].includes(st.status)
+      ? `<button id="skipBtn" class="alt">Skip round</button>` : "";
+
+    if (st.status === "over") {
+      const r = st.score / st.maxRounds;
+      const msg = r >= 1 ? "Perfect score!" : r >= 0.85 ? "Incredible!" : r >= 0.6 ? "Great teamwork." : r >= 0.3 ? "Not bad." : "Keep practicing.";
+      return `<div class="big">Game over</div>` +
+        `<p class="center">Final score: ${st.score} / ${st.maxRounds}<br>${msg}</p>` +
+        (st.isHost ? `<button id="resetBtn">Back to lobby</button>`
+                   : `<p class="muted center">Waiting for the host…</p>`);
+    }
+
+    if (st.status === "clue") {
+      if (st.isGuesser) return `<p class="muted">You're guessing this round. Waiting for clues…</p>${hostSkip}`;
+      if (me.submitted) return `<p class="muted">Clue sent. Waiting for the others…</p>${hostSkip}`;
+      return `<p class="muted">The secret word is</p>
+        <div class="big">${esc(st.word)}</div>
+        <input id="clueIn" maxlength="30" placeholder="One-word clue" autocomplete="off">
+        <button id="clueBtn">Send clue</button>${hostSkip}`;
+    }
+
+    if (st.status === "guess") {
+      if (st.isGuesser) {
+        return `<p class="muted">Use the clues to guess the word.</p>
+          <input id="guessIn" maxlength="30" placeholder="Your guess" autocomplete="off">
+          <button id="guessBtn">Lock in guess</button>${hostSkip}`;
+      }
+      return `<p class="muted">Waiting for ${esc(st.guesserName)} to guess…</p>${hostSkip}`;
+    }
+
+    const r = st.result || {};
+    const verdict = r.skipped ? "Round skipped" : r.correct ? "Correct!" : `Not quite. Guessed: ${esc(r.guess)}`;
+    return `<p class="muted center">The word was</p>
+      <div class="big">${esc(st.word)}</div>
+      <p class="center">${verdict}</p>
+      ${st.isHost
+        ? `<button id="nextBtn">${st.round >= st.maxRounds ? "See results" : "Next round"}</button>`
+        : `<p class="muted center">Waiting for the host…</p>`}`;
+  }
+
+  function renderClues() {
+    const box = $("cluesBox");
+    if (st.status === "clue") {
+      box.innerHTML = `<div class="muted">Clues stay hidden until everyone has sent one.</div>`;
+      return;
+    }
+    if (!st.clues) { box.innerHTML = ""; return; }
+    if (st.clues.length === 0) { box.innerHTML = `<div class="muted">No clues this round.</div>`; return; }
+    box.innerHTML = `<div class="muted">Clues</div><ul>` +
+      st.clues.map((c) =>
+        `<li class="${c.valid ? "" : "dup"}"><span>${esc(c.text)}</span>` +
+        `<span class="muted">${c.valid ? esc(c.name || "") : "duplicate"}</span></li>`
+      ).join("") + `</ul>`;
+  }
+
+  function renderPlayers() {
+    $("gamePlayers").innerHTML = st.players.map((p) => {
+      let tag = "";
+      if (p.id === st.guesserId) tag = "guessing";
+      else if (st.status === "clue") tag = p.submitted ? "clue sent" : "writing clue…";
+      const suffix = (p.id === st.meId ? " (you)" : "") + (p.connected ? "" : " (offline)");
+      return `<li><span>${esc(p.name)}${suffix}</span><span class="muted">${tag}</span></li>`;
+    }).join("");
+  }
+
+  // Countdown. A clue typed but not sent is submitted automatically when time hits zero.
+  setInterval(() => {
+    const card = $("timerCard");
+    if (!st || st.status !== "clue" || st.endAt == null) { card.classList.add("hidden"); return; }
+    const left = Math.max(0, st.endAt - Date.now());
+    card.classList.remove("hidden");
+    card.classList.toggle("urgent", left <= 10000);
+    $("timerText").textContent = Math.ceil(left / 1000) + "s";
+    $("timerFill").style.width = (left / (st.clueSeconds * 1000)) * 100 + "%";
+    if (left === 0 && autoSentRound !== st.round) {
+      autoSentRound = st.round;
+      const t = $("clueIn")?.value.trim();
+      if (t) socket.emit("clue", { text: t });
+    }
+  }, 250);
+</script>
+</body>
+</html>
