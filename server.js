@@ -47,6 +47,18 @@ const BASE_URL = process.env.PUBLIC_URL || `http://${lanAddress()}:${PORT}`;
 
 const clean = (s, max = 20) => String(s ?? "").trim().slice(0, max);
 const norm = (s) => String(s ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
+// Two clues count as the same idea when they match exactly, or when one is a
+// word-start of the other (gas/gasoline, girl/girlfriend). The shorter word must
+// be at least 4 letters so short words don't swallow unrelated ones.
+const MIN_STEM = 4;
+// Short roots that the rule above would miss. Each entry is [root, derived form].
+const EXTRA_ROOTS = [["gas", "gasoline"], ["gas", "gases"]];
+const sameIdea = (a, b) => {
+  if (a === b) return true;
+  const [short, long] = a.length <= b.length ? [a, b] : [b, a];
+  if (short.length >= MIN_STEM && long.startsWith(short)) return true;
+  return EXTRA_ROOTS.some(([r, d]) => (a === r && b === d) || (a === d && b === r));
+};
 const cleanPid = (v) => (/^[\w-]{8,64}$/.test(String(v)) ? String(v) : null);
 const getRoom = (code) => rooms.get(String(code || "").trim().toUpperCase());
 const find = (room, pid) => room.players.find((p) => p.id === pid);
@@ -190,14 +202,14 @@ function finishClues(room, force = false) {
     return;
   }
 
-  const counts = new Map();
-  for (const text of room.clues.values()) {
-    const k = norm(text);
-    counts.set(k, (counts.get(k) || 0) + 1);
-  }
-  room.finalClues = [...room.clues.entries()].map(([pid, text]) => {
-    const k = norm(text);
-    return { name: find(room, pid)?.name || "?", text, valid: counts.get(k) === 1 && k !== norm(room.word) };
+  const entries = [...room.clues.entries()].map(([pid, text]) => ({ pid, text, k: norm(text) }));
+  room.finalClues = entries.map((e) => {
+    const dupe = entries.some((o) => o !== e && sameIdea(e.k, o.k));
+    return {
+      name: find(room, e.pid)?.name || "?",
+      text: e.text,
+      valid: !dupe && e.k !== norm(room.word),
+    };
   });
   room.status = "guess";
 }
