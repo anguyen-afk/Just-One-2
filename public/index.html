@@ -100,6 +100,7 @@
   <button id="leaveBtn" class="link hidden">Leave room</button>
 </main>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
 <script src="/socket.io/socket.io.js"></script>
 <script>
   const socket = io();
@@ -229,8 +230,17 @@
     if (document.activeElement !== el) el.value = v;
   }
 
+  function makeQR(text) {
+    if (typeof qrcode !== "function") return null;
+    const q = qrcode(0, "M");
+    q.addData(text);
+    q.make();
+    return q.createDataURL(6, 4);
+  }
+
   function renderLobby() {
-    $("qr").src = st.qr;
+    // Build the join link from the address this page was opened at, so it never has a stray slash or localhost.
+    $("qr").src = makeQR(`${location.origin}/?room=${st.code}`) || st.qr;
     $("lobbyCode").textContent = "Room " + st.code;
     $("lobbyPlayers").innerHTML = st.players.map((p) =>
       `<li><span>${esc(p.name)}${p.id === st.meId ? " (you)" : ""}${p.connected ? "" : " (offline)"}</span>` +
