@@ -321,9 +321,12 @@
       return;
     }
     if (!st.clues) { box.innerHTML = ""; return; }
-    if (st.clues.length === 0) { box.innerHTML = `<div class="muted">No clues this round.</div>`; return; }
+    // During guessing, the guesser shouldn't see duplicates. Everyone else, and everyone after the reveal, sees the full list.
+    const hideDups = st.status === "guess" && st.isGuesser;
+    const shown = hideDups ? st.clues.filter((c) => c.valid) : st.clues;
+    if (shown.length === 0) { box.innerHTML = `<div class="muted">No clues this round.</div>`; return; }
     box.innerHTML = `<div class="muted">Clues</div><ul>` +
-      st.clues.map((c) =>
+      shown.map((c) =>
         `<li class="${c.valid ? "" : "dup"}"><span>${esc(c.text)}</span>` +
         `<span class="muted">${c.valid ? esc(c.name || "") : "duplicate"}</span></li>`
       ).join("") + `</ul>`;
