@@ -69,6 +69,8 @@
         <option value="60">60 seconds</option>
         <option value="90">90 seconds</option>
       </select>
+      <label for="category" id="categoryLabel">Category</label>
+      <select id="category"></select>
       <label for="wordMode">Word list</label>
       <select id="wordMode">
         <option value="builtin">Built-in words</option>
@@ -148,6 +150,7 @@
 
   const currentSettings = () => ({
     clueSeconds: Number($("clueSecs").value),
+    category: $("category").value,
     wordMode: $("wordMode").value,
     customWords: $("customWords").value,
   });
@@ -185,7 +188,7 @@
     if (b && handlers[b.id]) handlers[b.id]();
   });
   document.body.addEventListener("change", (e) => {
-    if (["clueSecs", "wordMode", "customWords"].includes(e.target.id)) pushSettings();
+    if (["clueSecs", "category", "wordMode", "customWords"].includes(e.target.id)) pushSettings();
   });
   document.body.addEventListener("keydown", (e) => {
     if (e.key !== "Enter") return;
@@ -250,16 +253,27 @@
     const s = st.settings;
     $("settings").classList.toggle("hidden", !st.isHost);
     $("settingsView").classList.toggle("hidden", st.isHost);
+    const catSel = $("category");
+    if (catSel.options.length !== st.categories.length) {
+      catSel.innerHTML = st.categories.map((c) =>
+        `<option value="${esc(c.key)}">${esc(c.label)} (${c.count})</option>`).join("");
+    }
+    const hideCat = s.wordMode === "custom";
+    catSel.classList.toggle("hidden", hideCat);
+    $("categoryLabel").classList.toggle("hidden", hideCat);
     if (st.isHost) {
       setIfIdle("clueSecs", String(s.clueSeconds));
+      setIfIdle("category", s.category);
       setIfIdle("wordMode", s.wordMode);
       setIfIdle("customWords", s.customWords.join("\n"));
     }
     const rounds = `${st.maxRounds} round${st.maxRounds === 1 ? "" : "s"}`;
     $("wordCount").textContent = `${st.poolSize} words available · ${rounds}`;
     const modeTxt = { builtin: "built-in words", custom: "host's own words", both: "built-in + host's words" }[s.wordMode];
+    const catLabel = st.categories.find((c) => c.key === s.category)?.label || "All words";
+    const catTxt = s.wordMode === "custom" ? "" : catLabel + " · ";
     $("settingsView").textContent =
-      `${s.clueSeconds ? s.clueSeconds + "s clue timer" : "No clue timer"} · ${modeTxt} · ${rounds}`;
+      `${s.clueSeconds ? s.clueSeconds + "s clue timer" : "No clue timer"} · ${catTxt}${modeTxt} · ${rounds}`;
 
     const enough = st.players.filter((p) => p.connected).length >= 3;
     $("startBtn").classList.toggle("hidden", !st.isHost);
@@ -331,8 +345,9 @@
       return;
     }
     if (!st.clues) { box.innerHTML = ""; return; }
-    // The guesser never sees duplicate clues, in any phase. Everyone else sees the full list.
-    const hideDups = st.isGuesser;
+    // During the clue and guess phases the guesser never sees duplicate clues.
+    // Once the round ends, everyone (guesser included) sees the full list with duplicates marked.
+    const hideDups = st.isGuesser && ["clue", "guess"].includes(st.status);
     const shown = hideDups ? st.clues.filter((c) => c.valid) : st.clues;
     if (shown.length === 0) { box.innerHTML = `<div class="muted">No clues this round.</div>`; return; }
     box.innerHTML = `<div class="muted">Clues</div><ul>` +
