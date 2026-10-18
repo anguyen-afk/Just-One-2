@@ -15,18 +15,144 @@ const TIMER_CHOICES = [0, 30, 45, 60, 90]; // 0 = no timer
 const WORD_MODES = ["builtin", "custom", "both"];
 const CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ";
 
-const WORDS = [
-  "Apple", "Bridge", "Cloud", "Dragon", "Eclipse", "Forest", "Ghost", "Harbor", "Island", "Jungle",
-  "Kettle", "Lantern", "Mirror", "Nebula", "Ocean", "Pirate", "Quartz", "Rocket", "Shadow", "Tornado",
-  "Umbrella", "Volcano", "Whistle", "Yacht", "Zebra", "Castle", "Diamond", "Engine", "Feather", "Glacier",
-  "Hammock", "Igloo", "Jigsaw", "Kite", "Magnet", "Needle", "Orchard", "Parrot", "Robot", "Saddle",
-  "Anchor", "Balloon", "Candle", "Desert", "Elephant", "Fountain", "Guitar", "Honey", "Iceberg", "Jacket",
-  "Knight", "Ladder", "Mountain", "Napkin", "Octopus", "Piano", "Queen", "Rainbow", "Sandwich", "Telescope",
-  "Unicorn", "Violin", "Waterfall", "Xylophone", "Yogurt", "Zeppelin", "Bakery", "Compass", "Dolphin", "Envelope",
-  "Flamingo", "Garden", "Helmet", "Insect", "Jellyfish", "Kangaroo", "Library", "Mushroom", "Notebook", "Olive",
-  "Penguin", "Quilt", "River", "Scissors", "Treasure", "Pyramid", "Vampire", "Windmill", "Satellite", "Lighthouse",
-  "Skeleton", "Carnival", "Blizzard", "Avalanche", "Submarine", "Scarecrow", "Pancake", "Marathon", "Passport", "Thunder",
-];
+const CATEGORIES = {
+  "General": [
+    "Apple", "Bridge", "Cloud", "Dragon", "Eclipse", "Forest", "Ghost", "Harbor",
+    "Island", "Jungle", "Kettle", "Lantern", "Mirror", "Nebula", "Ocean", "Pirate",
+    "Quartz", "Rocket", "Shadow", "Tornado", "Umbrella", "Volcano", "Whistle", "Yacht",
+    "Zebra", "Castle", "Diamond", "Engine", "Feather", "Glacier", "Hammock", "Igloo",
+    "Jigsaw", "Kite", "Magnet", "Needle", "Orchard", "Parrot", "Robot", "Saddle",
+    "Anchor", "Balloon", "Candle", "Desert", "Elephant", "Fountain", "Guitar", "Honey",
+    "Iceberg", "Jacket", "Knight", "Ladder", "Mountain", "Napkin", "Octopus", "Piano",
+    "Queen", "Rainbow", "Sandwich", "Telescope", "Unicorn", "Violin", "Waterfall", "Xylophone",
+    "Yogurt", "Zeppelin", "Bakery", "Compass", "Dolphin", "Envelope", "Flamingo", "Garden",
+    "Helmet", "Insect", "Jellyfish", "Kangaroo", "Library", "Mushroom", "Notebook", "Olive",
+    "Penguin", "Quilt", "River", "Scissors", "Treasure", "Pyramid", "Vampire", "Windmill",
+    "Satellite", "Lighthouse", "Skeleton", "Carnival", "Blizzard", "Avalanche", "Submarine", "Scarecrow",
+    "Pancake", "Marathon", "Passport", "Thunder",
+  ],
+  "Animals": [
+    "Lion", "Tiger", "Giraffe", "Monkey", "Hippo", "Rhino", "Koala", "Panda",
+    "Otter", "Badger", "Beaver", "Walrus", "Moose", "Bison", "Camel", "Donkey",
+    "Goat", "Sheep", "Rabbit", "Hamster", "Squirrel", "Raccoon", "Hedgehog", "Skunk",
+    "Possum", "Weasel", "Ferret", "Llama", "Alpaca", "Gorilla", "Chimp", "Lemur",
+    "Sloth", "Meerkat", "Cheetah", "Leopard", "Jaguar", "Cobra", "Python", "Turtle",
+    "Tortoise", "Frog", "Toad", "Lizard", "Gecko", "Iguana", "Salmon", "Shark",
+    "Whale", "Seal", "Crab", "Lobster", "Starfish", "Seahorse", "Hawk", "Eagle",
+    "Owl", "Vulture", "Pigeon", "Crow", "Swan", "Peacock", "Toucan", "Ostrich",
+    "Emu", "Bee", "Ant", "Beetle", "Butterfly", "Moth", "Spider", "Scorpion",
+    "Dragonfly",
+  ],
+  "Food & Drink": [
+    "Pizza", "Burger", "Taco", "Sushi", "Pasta", "Noodle", "Waffle", "Bagel",
+    "Donut", "Muffin", "Cookie", "Brownie", "Cupcake", "Pretzel", "Popcorn", "Nacho",
+    "Burrito", "Curry", "Dumpling", "Ramen", "Lasagna", "Omelet", "Biscuit", "Cheese",
+    "Butter", "Mustard", "Ketchup", "Pepper", "Garlic", "Onion", "Carrot", "Potato",
+    "Tomato", "Broccoli", "Pickle", "Avocado", "Banana", "Mango", "Lemon", "Cherry",
+    "Peach", "Grape", "Melon", "Coconut", "Pineapple", "Coffee", "Espresso", "Latte",
+    "Cocoa", "Lemonade", "Soda", "Smoothie", "Milkshake", "Cider", "Wine", "Whiskey",
+    "Vodka", "Cocktail", "Champagne", "Soup", "Salad", "Steak", "Bacon", "Sausage",
+    "Meatball", "Toast", "Cereal",
+  ],
+  "Places & Travel": [
+    "Airport", "Hotel", "Hostel", "Beach", "Canyon", "Cavern", "Village", "Palace",
+    "Museum", "Stadium", "Theater", "Market", "Subway", "Station", "Cabin", "Tent",
+    "Suitcase", "Backpack", "Ticket", "Luggage", "Cruise", "Ferry", "Railway", "Tunnel",
+    "Monument", "Temple", "Mosque", "Cathedral", "Safari", "Resort", "Campground", "Lobby",
+    "Balcony", "Terrace", "Plaza", "Boulevard", "Alley", "Highway", "Crossroads", "Metropolis",
+    "Capital", "Province", "Continent", "Peninsula", "Archipelago", "Hilltop", "Waterfront", "Lodge",
+    "Souvenir",
+  ],
+  "Sports & Games": [
+    "Soccer", "Baseball", "Basketball", "Tennis", "Golf", "Hockey", "Boxing", "Wrestling",
+    "Fencing", "Archery", "Bowling", "Darts", "Chess", "Checkers", "Poker", "Dominoes",
+    "Jenga", "Charades", "Puzzle", "Trophy", "Medal", "Referee", "Goalie", "Striker",
+    "Dribble", "Sprint", "Hurdle", "Javelin", "Discus", "Relay", "Snowboard", "Surfing",
+    "Skiing", "Skating", "Kayak", "Canoe", "Rowing", "Sailing", "Cycling", "Triathlon",
+    "Gymnast", "Jockey", "Racket", "Paddle", "Bullseye", "Umpire", "Champion", "Playbook",
+    "Huddle", "Penalty", "Overtime", "Dugout", "Podium", "Slalom",
+  ],
+  "Music": [
+    "Drum", "Trumpet", "Trombone", "Saxophone", "Clarinet", "Flute", "Harp", "Cello",
+    "Banjo", "Ukulele", "Accordion", "Harmonica", "Tuba", "Bagpipes", "Synthesizer", "Microphone",
+    "Speaker", "Headphones", "Vinyl", "Cassette", "Record", "Concert", "Festival", "Orchestra",
+    "Chorus", "Melody", "Rhythm", "Harmony", "Chord", "Tempo", "Lyric", "Ballad",
+    "Anthem", "Encore", "Opera", "Jazz", "Blues", "Reggae", "Polka", "Waltz",
+    "Tango", "Disco", "Karaoke", "Mixtape", "Playlist", "Album", "Remix", "Sitar",
+    "Bongo", "Tambourine", "Metronome", "Conductor", "Baton", "Stage", "Spotlight",
+  ],
+  "Science & Space": [
+    "Atom", "Molecule", "Electron", "Proton", "Neutron", "Gravity", "Laser", "Prism",
+    "Microscope", "Lens", "Astronaut", "Asteroid", "Comet", "Meteor", "Galaxy", "Orbit",
+    "Planet", "Moon", "Saturn", "Mars", "Jupiter", "Venus", "Mercury", "Pluto",
+    "Quasar", "Supernova", "Vacuum", "Fossil", "Dinosaur", "Lab", "Experiment", "Hypothesis",
+    "Formula", "Chemistry", "Physics", "Biology", "Genome", "Cell", "Bacteria", "Virus",
+    "Vaccine", "Enzyme", "Fusion", "Plasma", "Crystal", "Circuit", "Battery", "Voltage",
+    "Quantum", "Photon", "Radar", "Sonar", "Oxygen", "Nitrogen", "Carbon", "Helium",
+    "Hydrogen",
+  ],
+  "Jobs & Careers": [
+    "Doctor", "Nurse", "Teacher", "Pilot", "Chef", "Farmer", "Lawyer", "Judge",
+    "Plumber", "Electrician", "Carpenter", "Mechanic", "Dentist", "Surgeon", "Firefighter", "Soldier",
+    "Sailor", "Miner", "Barber", "Tailor", "Baker", "Butcher", "Librarian", "Janitor",
+    "Cashier", "Waiter", "Bartender", "Actor", "Singer", "Dancer", "Painter", "Sculptor",
+    "Architect", "Engineer", "Scientist", "Detective", "Spy", "Magician", "Clown", "Juggler",
+    "Cowboy", "Ranger", "Diplomat", "Mayor", "Accountant", "Banker", "Journalist", "Editor",
+    "Photographer", "Programmer", "Veterinarian", "Pharmacist",
+  ],
+  "Home & Household": [
+    "Sofa", "Couch", "Chair", "Table", "Lamp", "Pillow", "Blanket", "Curtain",
+    "Carpet", "Shelf", "Drawer", "Closet", "Attic", "Basement", "Kitchen", "Bathroom",
+    "Bedroom", "Garage", "Porch", "Fridge", "Oven", "Toaster", "Blender", "Microwave",
+    "Dishwasher", "Vacuum", "Broom", "Mop", "Bucket", "Sponge", "Soap", "Shampoo",
+    "Towel", "Faucet", "Sink", "Bathtub", "Toilet", "Doorbell", "Keyhole", "Hinge",
+    "Hammer", "Wrench", "Screwdriver", "Toolbox", "Clock", "Calendar", "Stapler", "Eraser",
+    "Ruler", "Crayon", "Marker", "Paperclip",
+  ],
+  "Fantasy & Myth": [
+    "Wizard", "Witch", "Goblin", "Troll", "Elf", "Dwarf", "Giant", "Mermaid",
+    "Centaur", "Griffin", "Phoenix", "Kraken", "Yeti", "Bigfoot", "Werewolf", "Zombie",
+    "Ghoul", "Banshee", "Gremlin", "Sphinx", "Minotaur", "Cyclops", "Hydra", "Pegasus",
+    "Gargoyle", "Sorcerer", "Enchanter", "Potion", "Spell", "Wand", "Sword", "Shield",
+    "Armor", "Dungeon", "Quest", "Prophecy", "Oracle", "Kingdom", "Throne", "Crown",
+    "Scepter", "Amulet", "Relic", "Curse", "Riddle", "Labyrinth", "Familiar", "Grimoire",
+  ],
+  "Vehicles": [
+    "Car", "Truck", "Bus", "Van", "Taxi", "Tractor", "Bulldozer", "Ambulance",
+    "Scooter", "Motorcycle", "Bicycle", "Tricycle", "Skateboard", "Sled", "Wagon", "Carriage",
+    "Rickshaw", "Tram", "Train", "Locomotive", "Airplane", "Helicopter", "Glider", "Blimp",
+    "Hovercraft", "Yacht", "Raft", "Tugboat", "Spaceship", "Jetpack", "Limousine", "Convertible",
+    "Minivan", "Forklift", "Snowmobile", "Segway", "Monorail", "Gondola", "Hearse", "Trailer",
+    "Caravan", "Jeep", "Pickup", "Sedan", "Hatchback",
+  ],
+  "Holidays & Celebrations": [
+    "Birthday", "Wedding", "Christmas", "Halloween", "Easter", "Hanukkah", "Diwali", "Thanksgiving",
+    "Valentine", "Parade", "Fireworks", "Costume", "Pinata", "Confetti", "Party", "Picnic",
+    "Barbecue", "Reunion", "Anniversary", "Graduation", "Ceremony", "Feast", "Gift", "Ribbon",
+    "Present", "Cake", "Sparkler", "Tinsel", "Wreath", "Stocking", "Pumpkin", "Turkey",
+    "Eggnog", "Mistletoe", "Snowman", "Bonfire", "Garland", "Cheers", "Masquerade",
+  ],
+  "Nature & Weather": [
+    "Rain", "Snow", "Sleet", "Hail", "Fog", "Mist", "Lightning", "Hurricane",
+    "Monsoon", "Drought", "Breeze", "Gale", "Storm", "Sunshine", "Sunset", "Sunrise",
+    "Dew", "Frost", "Icicle", "Meadow", "Prairie", "Tundra", "Savanna", "Swamp",
+    "Marsh", "Valley", "Cliff", "Boulder", "Pebble", "Sand", "Dune", "Lagoon",
+    "Geyser", "Stream", "Creek", "Pond", "Lake", "Reef", "Coral", "Moss",
+    "Fern", "Bamboo", "Cactus", "Pine", "Maple", "Willow", "Oak", "Blossom",
+    "Petal", "Acorn", "Pinecone",
+  ],
+};
+
+const ALL_WORDS = (() => {
+  const seen = new Set();
+  return Object.values(CATEGORIES).flat().filter((w) => {
+    const k = w.toLowerCase();
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+})();
+const CATEGORY_KEYS = ["all", ...Object.keys(CATEGORIES)];
 
 const app = express();
 app.use(express.static(path.join(__dirname, "public")));
@@ -88,9 +214,18 @@ function parseWords(text) {
   return out;
 }
 
+const categoryWords = (key) => (key === "all" ? ALL_WORDS : CATEGORIES[key] || []);
+
+const CATEGORY_LIST = CATEGORY_KEYS.map((key) => ({
+  key,
+  label: key === "all" ? "All words" : key,
+  count: categoryWords(key).length,
+}));
+
 function buildPool(room) {
-  const { wordMode, customWords } = room.settings;
-  const list = wordMode === "custom" ? customWords : wordMode === "both" ? [...WORDS, ...customWords] : WORDS;
+  const { wordMode, customWords, category } = room.settings;
+  const built = categoryWords(category);
+  const list = wordMode === "custom" ? customWords : wordMode === "both" ? [...built, ...customWords] : built;
   const seen = new Set();
   return list.filter((w) => {
     const k = norm(w);
@@ -105,6 +240,7 @@ function applySettings(room, s) {
   const secs = Number(s.clueSeconds);
   if (TIMER_CHOICES.includes(secs)) room.settings.clueSeconds = secs;
   if (WORD_MODES.includes(s.wordMode)) room.settings.wordMode = s.wordMode;
+  if (CATEGORY_KEYS.includes(s.category)) room.settings.category = s.category;
   if (typeof s.customWords === "string") room.settings.customWords = parseWords(s.customWords);
 }
 
@@ -137,9 +273,11 @@ function view(room, pid) {
     result: room.result,
     clueSeconds: s.clueSeconds,
     msLeft: room.status === "clue" && room.deadline ? Math.max(0, room.deadline - Date.now()) : null,
+    categories: CATEGORY_LIST,
     settings: {
       clueSeconds: s.clueSeconds,
       wordMode: s.wordMode,
+      category: s.category,
       customWords: isHost ? s.customWords : [],
       customCount: s.customWords.length,
     },
@@ -254,7 +392,7 @@ io.on("connection", (socket) => {
         founderId: id,
         hostId: id,
         players: [{ id, name: n, sock: null, connected: true }],
-        settings: { clueSeconds: 0, wordMode: "builtin", customWords: [] },
+        settings: { clueSeconds: 0, wordMode: "builtin", category: "all", customWords: [] },
         status: "lobby",
         round: 0,
         maxRounds: MAX_ROUNDS,
