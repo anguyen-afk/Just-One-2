@@ -189,7 +189,10 @@ const cleanPid = (v) => (/^[\w-]{8,64}$/.test(String(v)) ? String(v) : null);
 const getRoom = (code) => rooms.get(String(code || "").trim().toUpperCase());
 const find = (room, pid) => room.players.find((p) => p.id === pid);
 const active = (room) => room.players.filter((p) => p.connected);
-const givers = (room) => active(room).filter((p) => p.id !== room.guesserId);
+// Players who take part in rounds. Late joiners are "waiting" until the next round starts.
+const seated = (room) => active(room).filter((p) => !p.waiting);
+const givers = (room) => seated(room).filter((p) => p.id !== room.guesserId);
+const votersOf = (room) => givers(room).filter((p) => room.clues.has(p.id));
 
 function makeCode() {
   let code;
@@ -242,6 +245,50 @@ function applySettings(room, s) {
   if (WORD_MODES.includes(s.wordMode)) room.settings.wordMode = s.wordMode;
   if (CATEGORY_KEYS.includes(s.category)) room.settings.category = s.category;
   if (typeof s.customWords === "string") room.settings.customWords = parseWords(s.customWords);
+  if (typeof s.live === "boolean") room.settings.live = s.live;
+}
+
+// Returns the clue a player wrote this round (and whether it survived the duplicate check).
+// Player IDs are secrets used for rejoining, so they are never sent to clients.
+function myClueOf(room, pid) {
+  if (!room.finalClues) return null;
+  const idx = [...room.clues.keys()].indexOf(pid);
+  const c = idx >= 0 ? room.finalClues[idx] : null;
+  return c ? { text: c.text, valid: c.valid, hidden: room.hidden.has(idx) } : null;
+}
+
+// What each viewer sees of the clues. The guesser never sees clues during voting,
+// and hidden clues are removed before guessing and marked after the reveal.
+function clueListFor(room, isGuesser) {
+  const list = room.finalClues || [];
+  const revealed = room.status === "reveal" || room.status === "over";
+  if (room.status === "vote") {
+    if (isGuesser) return null;
+    return list.map((c, i) => ({ index: i, text: c.text, valid: c.valid, name: null, hidden: false }));
+  }
+  if (room.status === "guess" && !room.settings.live) {
+    return list
+      .map((c, i) => ({ text: c.text, valid: c.valid, name: null, hidden: false, i }))
+      .filter((c) => !room.hidden.has(c.i))
+      .map(({ i, ...c }) => c);
+  }
+  if (revealed) {
+    return list.map((c, i) => ({ text: c.text, valid: c.valid, name: c.name, hidden: room.hidden.has(i) }));
+  }
+  return null;
+}
+
+// Vote panel state for one viewer during the voting stage.
+function voteInfo(room, pid) {
+  if (room.status !== "vote") return null;
+  const voters = votersOf(room);
+  return {
+    isVoter: voters.some((p) => p.id === pid),
+    mine: [...(room.votes.get(pid) || [])],
+    locked: room.locked.has(pid),
+    lockedCount: voters.filter((p) => room.locked.has(p.id)).length,
+    voterCount: voters.length,
+  };
 }
 
 // ---------- state sent to each player ----------
@@ -261,15 +308,19 @@ function view(room, pid) {
     poolSize: pool ? pool.length : null,
     score: room.score,
     meId: pid,
+    waiting: !!find(room, pid)?.waiting,
+    poll: room.poll ? pollInfo(room, pid) : null,
     isHost,
     hostId: room.hostId,
     guesserId: room.guesserId,
     guesserName: find(room, room.guesserId)?.name || null,
     isGuesser,
     word: isGuesser && !revealed ? null : room.word,
-    clues: room.status === "guess" || revealed
-      ? (room.finalClues || []).map((c) => ({ ...c, name: revealed ? c.name : null }))
-      : null,
+    live: s.live,
+    // In person mode, clue texts stay on the clue givers' phones until the round is revealed.
+    clues: clueListFor(room, isGuesser),
+    vote: voteInfo(room, pid),
+    myClue: s.live && room.status === "guess" && !isGuesser ? myClueOf(room, pid) : null,
     result: room.result,
     clueSeconds: s.clueSeconds,
     msLeft: room.status === "clue" && room.deadline ? Math.max(0, room.deadline - Date.now()) : null,
@@ -280,11 +331,14 @@ function view(room, pid) {
       category: s.category,
       customWords: isHost ? s.customWords : [],
       customCount: s.customWords.length,
+      live: s.live,
     },
     players: room.players.map((p) => ({
       id: p.id,
       name: p.name,
       connected: p.connected,
+      waiting: !!p.waiting,
+      locked: room.locked.has(p.id),
       submitted: room.clues.has(p.id),
     })),
   };
@@ -297,6 +351,19 @@ function broadcast(room) {
 }
 
 // ---------- round flow ----------
+// The next guesser is the next seated player after the previous guesser, in seat order.
+// Newcomers take their place at the end of the seat order, so nobody guesses twice in a row.
+function nextGuesser(room) {
+  const ready = seated(room);
+  if (ready.length === 0) return null;
+  const i = room.players.findIndex((p) => p.id === room.guesserId);
+  for (let k = 1; k <= room.players.length; k++) {
+    const p = room.players[(i + k) % room.players.length];
+    if (ready.includes(p)) return p;
+  }
+  return ready[0];
+}
+
 function startRound(room) {
   const pool = buildPool(room).filter((w) => !room.usedWords.has(w));
   room.word = pool[Math.floor(Math.random() * pool.length)];
@@ -305,8 +372,12 @@ function startRound(room) {
   room.clues = new Map();
   room.finalClues = null;
   room.result = null;
-  const act = active(room);
-  room.guesserId = act[room.guesserIdx % act.length].id;
+  room.votes = new Map();
+  room.locked = new Set();
+  room.hidden = new Set();
+  // Everyone who joined mid-game is seated from this round on.
+  room.players.forEach((p) => { p.waiting = false; });
+  room.guesserId = nextGuesser(room)?.id ?? null;
   room.status = "clue";
   startClueTimer(room);
   broadcast(room);
@@ -349,7 +420,72 @@ function finishClues(room, force = false) {
       valid: !dupe && e.k !== norm(room.word),
     };
   });
+  room.status = "vote";
+  checkVotes(room);
+}
+
+// Once every voter has locked in, hide clues that a strict majority voted to hide.
+function checkVotes(room) {
+  if (room.status !== "vote") return;
+  const voters = votersOf(room);
+  if (!voters.every((p) => room.locked.has(p.id))) return;
+  room.hidden = new Set();
+  (room.finalClues || []).forEach((_, i) => {
+    const count = voters.filter((p) => room.votes.get(p.id)?.has(i)).length;
+    if (count * 2 > voters.length) room.hidden.add(i);
+  });
   room.status = "guess";
+}
+
+// Ends the current game but keeps the scores on screen until someone starts again.
+function endGame(room) {
+  clearTimeout(room.timer);
+  room.deadline = null;
+  room.poll = null;
+  room.status = "over";
+}
+
+// Back to the lobby with everyone still connected. Offline players are dropped.
+function resetToLobby(room) {
+  clearTimeout(room.timer);
+  room.players = active(room);
+  room.players.forEach((p) => { p.waiting = false; });
+  Object.assign(room, {
+    status: "lobby", round: 0, score: 0, guesserId: null, word: null,
+    usedWords: new Set(), clues: new Map(), finalClues: null, result: null, deadline: null,
+    votes: new Map(), locked: new Set(), hidden: new Set(), poll: null,
+  });
+}
+
+// A proposal passes once more than half of connected players agree, and fails once
+// a majority can no longer agree.
+function checkPoll(room) {
+  const poll = room.poll;
+  if (!poll) return;
+  const voters = active(room);
+  const n = voters.length;
+  const yes = voters.filter((p) => poll.votes.get(p.id) === true).length;
+  const no = voters.filter((p) => poll.votes.get(p.id) === false).length;
+  if (yes * 2 > n) {
+    if (poll.type === "end") endGame(room);
+    else resetToLobby(room);
+    return;
+  }
+  if (no * 2 >= n) room.poll = null;
+}
+
+function pollInfo(room, pid) {
+  const voters = active(room);
+  const n = voters.length;
+  const yes = voters.filter((p) => room.poll.votes.get(p.id) === true).length;
+  return {
+    type: room.poll.type,
+    startedBy: room.poll.startedBy,
+    yes,
+    total: n,
+    needed: Math.floor(n / 2) + 1,
+    myVote: room.poll.votes.has(pid) ? room.poll.votes.get(pid) : null,
+  };
 }
 
 function afterDrop(room) {
@@ -361,6 +497,8 @@ function afterDrop(room) {
   const host = find(room, room.hostId);
   if (!host || !host.connected) room.hostId = active(room)[0].id;
   finishClues(room);
+  checkVotes(room);
+  checkPoll(room);
   broadcast(room);
 }
 
@@ -392,17 +530,20 @@ io.on("connection", (socket) => {
         founderId: id,
         hostId: id,
         players: [{ id, name: n, sock: null, connected: true }],
-        settings: { clueSeconds: 0, wordMode: "builtin", category: "all", customWords: [] },
+        settings: { clueSeconds: 0, wordMode: "builtin", category: "all", customWords: [], live: false },
         status: "lobby",
         round: 0,
         maxRounds: MAX_ROUNDS,
         score: 0,
-        guesserIdx: 0,
         guesserId: null,
         word: null,
         usedWords: new Set(),
         clues: new Map(),
         finalClues: null,
+        poll: null,         // open proposal to end the game or start a new one
+        votes: new Map(),   // clue giver id -> Set of clue indexes they want hidden
+        locked: new Set(),  // clue givers who have locked in their vote
+        hidden: new Set(),  // clue indexes hidden from the guesser by majority vote
         result: null,
         deadline: null,
       };
@@ -429,12 +570,13 @@ io.on("connection", (socket) => {
       return broadcast(room);
     }
     if (!n) return cb({ ok: false, error: "Enter a name first." });
-    if (room.status !== "lobby") return cb({ ok: false, error: "That game has already started." });
     if (room.players.length >= MAX_PLAYERS) return cb({ ok: false, error: "That room is full." });
     if (room.players.some((p) => p.name.toLowerCase() === n.toLowerCase())) {
       return cb({ ok: false, error: "That name is taken." });
     }
-    const p = { id, name: n, sock: null, connected: true };
+    // Joining after the game has started: sit out until the next round begins.
+    const midGame = room.status !== "lobby";
+    const p = { id, name: n, sock: null, connected: true, waiting: midGame };
     room.players.push(p);
     attach(room, p);
     cb({ ok: true, code: room.code });
@@ -480,7 +622,7 @@ io.on("connection", (socket) => {
     room.maxRounds = Math.min(MAX_ROUNDS, pool.length);
     room.round = 0;
     room.score = 0;
-    room.guesserIdx = 0;
+    room.guesserId = null;
     room.usedWords = new Set();
     cb({ ok: true });
     startRound(room);
@@ -490,11 +632,34 @@ io.on("connection", (socket) => {
     const room = myRoom;
     if (!room || room.status !== "clue") return;
     const p = find(room, myPid);
-    if (!p || !p.connected || p.id === room.guesserId) return;
+    if (!p || !p.connected || p.waiting || p.id === room.guesserId) return;
     const word = clean(text, 30).split(/\s+/)[0] || "";
     if (!norm(word)) return;
     room.clues.set(p.id, word);
     finishClues(room);
+    broadcast(room);
+  });
+
+  socket.on("vote", ({ index, hide } = {}) => {
+    const room = myRoom;
+    if (!room || room.status !== "vote") return;
+    const p = find(room, myPid);
+    if (!p || !votersOf(room).includes(p) || room.locked.has(p.id)) return;
+    if (!Number.isInteger(index) || index < 0 || index >= room.finalClues.length) return;
+    const set = room.votes.get(p.id) || new Set();
+    if (hide) set.add(index);
+    else set.delete(index);
+    room.votes.set(p.id, set);
+    broadcast(room);
+  });
+
+  socket.on("lockVote", () => {
+    const room = myRoom;
+    if (!room || room.status !== "vote") return;
+    const p = find(room, myPid);
+    if (!p || !votersOf(room).includes(p)) return;
+    room.locked.add(p.id);
+    checkVotes(room);
     broadcast(room);
   });
 
@@ -509,6 +674,17 @@ io.on("connection", (socket) => {
     broadcast(room);
   });
 
+  // In person mode: the guesser judges the answer themselves instead of typing it.
+  socket.on("judge", ({ correct } = {}) => {
+    const room = myRoom;
+    if (!room || room.status !== "guess" || myPid !== room.guesserId) return;
+    const ok = correct === true;
+    room.result = { correct: ok, guess: null, skipped: false };
+    if (ok) room.score += 1;
+    room.status = "reveal";
+    broadcast(room);
+  });
+
   socket.on("next", () => {
     const room = myRoom;
     if (!room || room.status !== "reveal" || myPid !== room.hostId) return;
@@ -516,14 +692,13 @@ io.on("connection", (socket) => {
       room.status = "over";
       return broadcast(room);
     }
-    room.guesserIdx += 1;
     startRound(room);
   });
 
   // Host escape hatch, e.g. when the guesser has gone offline.
   socket.on("skip", () => {
     const room = myRoom;
-    if (!room || myPid !== room.hostId || !["clue", "guess"].includes(room.status)) return;
+    if (!room || myPid !== room.hostId || !["clue", "vote", "guess"].includes(room.status)) return;
     clearTimeout(room.timer);
     room.deadline = null;
     room.result = { correct: false, guess: null, skipped: true };
@@ -531,14 +706,34 @@ io.on("connection", (socket) => {
     broadcast(room);
   });
 
+  // Any player can propose ending the game or starting a new one. Everyone else votes.
+  socket.on("poll", ({ type } = {}, cb = () => {}) => {
+    const room = myRoom;
+    const p = room && find(room, myPid);
+    if (!room || !p || !p.connected) return cb({ ok: false, error: "Join the room first." });
+    if (room.status === "lobby") return cb({ ok: false, error: "The game hasn't started yet." });
+    if (!["end", "new"].includes(type)) return cb({ ok: false, error: "Unknown request." });
+    if (type === "end" && room.status === "over") return cb({ ok: false, error: "The game is already over." });
+    if (room.poll) return cb({ ok: false, error: "A vote is already in progress." });
+    room.poll = { type, startedBy: p.name, votes: new Map([[p.id, true]]) };
+    cb({ ok: true });
+    checkPoll(room);
+    broadcast(room);
+  });
+
+  socket.on("pollVote", ({ yes } = {}) => {
+    const room = myRoom;
+    const p = room && find(room, myPid);
+    if (!room || !room.poll || !p || !p.connected) return;
+    room.poll.votes.set(p.id, yes === true);
+    checkPoll(room);
+    broadcast(room);
+  });
+
   socket.on("reset", () => {
     const room = myRoom;
     if (!room || room.status !== "over" || myPid !== room.hostId) return;
-    room.players = active(room);
-    Object.assign(room, {
-      status: "lobby", round: 0, score: 0, guesserIdx: 0, guesserId: null, word: null,
-      usedWords: new Set(), clues: new Map(), finalClues: null, result: null, deadline: null,
-    });
+    resetToLobby(room);
     broadcast(room);
   });
 
