@@ -33,6 +33,40 @@
   #timerCard.urgent #timerFill{background:#c0392b}
   #timerCard.urgent #timerText{color:#c0392b}
   .hidden{display:none!important}
+
+  /* Row of action buttons in the game screen */
+  .btn-row{display:flex;gap:8px}
+  .btn-row button{margin:6px 0;font-size:15px;padding:10px 6px}
+
+  /* Proposal panel (end game / new game) */
+  #pollBox{border-left:4px solid #2d6cdf}
+
+  /* Clue voting panel */
+  .vote-row{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid #eee}
+  .vote-btn{width:auto;margin:0;padding:8px 12px;font-size:15px}
+  .vote-btn.hide-on{background:#c0392b}
+
+  /* How-to-play card shown in the waiting room */
+  .howto h3{margin:0 0 4px;font-size:18px}
+  .howto ol{list-style:decimal;padding-left:22px;margin:8px 0}
+  .howto ol li{display:list-item;border:0;padding:4px 0;font-size:15px;line-height:1.4}
+  .howto p{font-size:15px;line-height:1.4;margin:6px 0}
+
+  /* In-person mode: clue giver's phone shows their clue full screen */
+  #showStage{position:fixed;inset:0;z-index:50;background:#1b1f2a;color:#fff;display:flex;flex-direction:column;overflow:auto}
+  #showStage .turn-hint{display:none;text-align:center;font-size:14px;color:#9fb6e8;padding:10px}
+  #showStage .show-body{flex:1;display:flex;flex-direction:column;justify-content:center;align-items:center;gap:14px;padding:20px;text-align:center}
+  #showStage .show-clue{font-size:clamp(28px,min(14vw,16vh),120px);font-weight:700;line-height:1.1;word-break:break-word}
+  #showStage .show-clue.struck{text-decoration:line-through;color:#7f8694}
+  #showStage .show-note{font-size:16px;color:#f0b4ab}
+  #showStage button{width:auto;padding:10px 18px;margin-top:12px}
+
+  /* Share overlay: QR code, web address and room code */
+  #shareModal{position:fixed;inset:0;z-index:60;background:#000a;display:flex;align-items:center;justify-content:center;padding:20px}
+  #shareModal .card{width:100%;max-width:340px;margin:0;text-align:center}
+  #shareUrl{word-break:break-all;font-size:14px;margin:6px 0 10px}
+  @media (orientation: portrait){ #showStage .turn-hint{display:block} }
+  @media (orientation: landscape){ #showStage .show-body{flex-direction:row;flex-wrap:wrap} }
 </style>
 </head>
 <body>
@@ -59,6 +93,22 @@
       <div class="muted">Players (need at least 3)</div>
       <ul id="lobbyPlayers"></ul>
     </div>
+    <div class="card howto">
+      <h3>How to play</h3>
+      <p class="muted">Work together to help the guesser find the secret word.</p>
+      <ol>
+        <li>Each round, one player is the guesser. Everyone else sees the secret word.</li>
+        <li>Each clue giver sends one word that hints at the secret word. Only the first word counts.</li>
+        <li>Clues that match each other, or the secret word, are crossed out so the guesser can't see them.</li>
+        <li>The guesser uses the remaining clues to guess the word. Each correct guess scores a point.</li>
+        <li>The guesser rotates each round, for up to 13 rounds.</li>
+      </ol>
+      <p class="muted" id="howtoRounds"></p>
+      <p class="muted" id="howtoMode"></p>
+      <p class="muted" id="howtoTimer"></p>
+      <p class="muted" id="howtoWords"></p>
+      <p class="muted">You need at least 3 players. The host chooses the settings and starts the game.</p>
+    </div>
     <div class="card" id="settings">
       <div class="muted">Game settings</div>
       <label for="clueSecs">Clue timer</label>
@@ -68,6 +118,11 @@
         <option value="45">45 seconds</option>
         <option value="60">60 seconds</option>
         <option value="90">90 seconds</option>
+      </select>
+      <label for="playMode">Play mode</label>
+      <select id="playMode">
+        <option value="online">Online: clues stay in the app</option>
+        <option value="live">In person: clue givers show their phones</option>
       </select>
       <label for="category" id="categoryLabel">Category</label>
       <select id="category"></select>
@@ -81,12 +136,19 @@
       <div class="muted" id="wordCount"></div>
     </div>
     <div class="card muted center" id="settingsView"></div>
+    <button id="shareBtn" class="alt">Show QR code &amp; room code</button>
     <button id="startBtn">Start game</button>
     <p class="muted center" id="lobbyHint"></p>
   </section>
 
   <section id="game" class="hidden">
     <div class="card row"><span id="roundInfo"></span><span id="scoreInfo"></span></div>
+    <div class="btn-row">
+      <button id="shareBtnGame" class="alt">Show QR code &amp; room code</button>
+      <button id="endGameBtn" class="alt">End game</button>
+      <button id="newGameBtn" class="alt">New game</button>
+    </div>
+    <div class="card hidden" id="pollBox"></div>
     <div class="card hidden" id="timerCard">
       <div class="row"><span>Time left</span><span id="timerText"></span></div>
       <div class="bar"><div id="timerFill"></div></div>
@@ -101,6 +163,16 @@
 
   <button id="leaveBtn" class="link hidden">Leave room</button>
 </main>
+<div id="showStage" class="hidden"></div>
+<div id="shareModal" class="hidden">
+  <div class="card">
+    <div class="muted">Scan or type to join</div>
+    <img id="shareQr" class="qr" alt="Join QR code">
+    <div class="big" id="shareCode"></div>
+    <div id="shareUrl" class="muted"></div>
+    <button id="shareClose" class="alt">Close</button>
+  </div>
+</div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
 <script src="/socket.io/socket.io.js"></script>
@@ -144,7 +216,7 @@
   function showHome() {
     st = null;
     phaseKey = "";
-    ["lobby", "game", "leaveBtn"].forEach((id) => $(id).classList.add("hidden"));
+    ["lobby", "game", "leaveBtn", "showStage", "shareModal"].forEach((id) => $(id).classList.add("hidden"));
     $("home").classList.remove("hidden");
   }
 
@@ -153,6 +225,7 @@
     category: $("category").value,
     wordMode: $("wordMode").value,
     customWords: $("customWords").value,
+    live: $("playMode").value === "live",
   });
   const pushSettings = () => socket.emit("settings", currentSettings());
 
@@ -172,7 +245,18 @@
     guessBtn: () => { const t = $("guessIn")?.value.trim(); if (t) socket.emit("guess", { text: t }); },
     nextBtn: () => socket.emit("next"),
     skipBtn: () => socket.emit("skip"),
+    shareBtn: () => openShare(),
+    shareBtnGame: () => openShare(),
+    shareClose: () => $("shareModal").classList.add("hidden"),
+    endGameBtn: () => proposeToPlayers("end"),
+    newGameBtn: () => proposeToPlayers("new"),
+    pollYes: () => socket.emit("pollVote", { yes: true }),
+    pollNo: () => socket.emit("pollVote", { yes: false }),
     resetBtn: () => socket.emit("reset"),
+    rightBtn: () => socket.emit("judge", { correct: true }),
+    wrongBtn: () => socket.emit("judge", { correct: false }),
+    skipLive: () => socket.emit("skip"),
+    lockVoteBtn: () => socket.emit("lockVote"),
     leaveBtn: () => {
       if (!confirm("Leave this room?")) return;
       socket.emit("leave");
@@ -184,11 +268,13 @@
   };
 
   document.body.addEventListener("click", (e) => {
+    const vb = e.target.closest("[data-vote]");
+    if (vb) return socket.emit("vote", { index: Number(vb.dataset.vote), hide: vb.dataset.hide === "1" });
     const b = e.target.closest("button");
     if (b && handlers[b.id]) handlers[b.id]();
   });
   document.body.addEventListener("change", (e) => {
-    if (["clueSecs", "category", "wordMode", "customWords"].includes(e.target.id)) pushSettings();
+    if (["clueSecs", "category", "wordMode", "customWords", "playMode"].includes(e.target.id)) pushSettings();
   });
   document.body.addEventListener("keydown", (e) => {
     if (e.key !== "Enter") return;
@@ -217,6 +303,26 @@
     render();
   });
 
+  function proposeToPlayers(type) {
+    socket.emit("poll", { type }, (res) => { if (res && !res.ok) showErr(res.error); });
+  }
+
+  // Open proposal to end the game or start a new one, with Agree / Disagree buttons.
+  function renderPoll() {
+    const box = $("pollBox");
+    const p = st && st.poll;
+    box.classList.toggle("hidden", !p);
+    if (!p) { box.innerHTML = ""; return; }
+    const what = p.type === "end" ? "end the game" : "start a new game";
+    box.innerHTML = `<div class="muted">Vote in progress</div>
+      <p class="center">${esc(p.startedBy)} wants to ${what}.</p>
+      <p class="center muted">${p.yes} of ${p.total} agree · ${p.needed} needed to pass</p>
+      <div class="btn-row">
+        <button id="pollYes" class="${p.myVote === true ? "" : "alt"}">${p.myVote === true ? "Agree ✓" : "Agree"}</button>
+        <button id="pollNo" class="${p.myVote === false ? "" : "alt"}">${p.myVote === false ? "Disagree ✓" : "Disagree"}</button>
+      </div>`;
+  }
+
   function render() {
     if (!st) return;
     showErr("");
@@ -225,7 +331,8 @@
     $("lobby").classList.toggle("hidden", st.status !== "lobby");
     $("game").classList.toggle("hidden", st.status === "lobby");
     if (st.status === "lobby") renderLobby();
-    else renderGame();
+    else { renderGame(); renderPoll(); }
+    renderShow();
   }
 
   function setIfIdle(id, v) {
@@ -239,6 +346,16 @@
     q.addData(text);
     q.make();
     return q.createDataURL(6, 4);
+  }
+
+  // Share overlay: works from any phase, so players can invite others at any point.
+  function openShare() {
+    if (!st) return;
+    const url = `${location.origin}/?room=${st.code}`;
+    $("shareQr").src = makeQR(url) || st.qr || "";
+    $("shareCode").textContent = "Room " + st.code;
+    $("shareUrl").textContent = url;
+    $("shareModal").classList.remove("hidden");
   }
 
   function renderLobby() {
@@ -265,6 +382,7 @@
       setIfIdle("clueSecs", String(s.clueSeconds));
       setIfIdle("category", s.category);
       setIfIdle("wordMode", s.wordMode);
+      setIfIdle("playMode", s.live ? "live" : "online");
       setIfIdle("customWords", s.customWords.join("\n"));
     }
     const rounds = `${st.maxRounds} round${st.maxRounds === 1 ? "" : "s"}`;
@@ -273,7 +391,19 @@
     const catLabel = st.categories.find((c) => c.key === s.category)?.label || "All words";
     const catTxt = s.wordMode === "custom" ? "" : catLabel + " · ";
     $("settingsView").textContent =
-      `${s.clueSeconds ? s.clueSeconds + "s clue timer" : "No clue timer"} · ${catTxt}${modeTxt} · ${rounds}`;
+      `${s.clueSeconds ? s.clueSeconds + "s clue timer" : "No clue timer"} · ${catTxt}${modeTxt} · ${s.live ? "in person" : "online"} · ${rounds}`;
+
+    // How-to-play card: keep the instructions in step with the current settings.
+    $("howtoRounds").textContent = `This game has ${st.maxRounds} round${st.maxRounds === 1 ? "" : "s"}.`;
+    $("howtoMode").textContent = s.live
+      ? "In person: clue givers show their clues on their phone screens, so the guesser sees them in the room."
+      : "Online: clues stay in the app, and the guesser reads them there.";
+    $("howtoTimer").textContent = s.clueSeconds
+      ? `Clue timer: you have ${s.clueSeconds} seconds to send your clue.`
+      : "No clue timer: take as long as you need to send your clue.";
+    $("howtoWords").textContent = s.wordMode === "custom"
+      ? "Words come from the host's own list."
+      : `Words come from ${catLabel}${s.wordMode === "both" ? ", plus the host's own words" : ""}.`;
 
     const enough = st.players.filter((p) => p.connected).length >= 3;
     $("startBtn").classList.toggle("hidden", !st.isHost);
@@ -286,8 +416,9 @@
   function renderGame() {
     $("roundInfo").textContent = `Round ${st.round} of ${st.maxRounds}`;
     $("scoreInfo").textContent = `Score ${st.score}`;
+    $("endGameBtn").classList.toggle("hidden", st.status === "over");
     const me = st.players.find((p) => p.id === st.meId) || {};
-    const key = [st.status, st.round, st.isGuesser, st.isHost, me.submitted, st.word, st.result?.guess].join("|");
+    const key = [st.status, st.round, st.isGuesser, st.isHost, st.waiting, me.submitted, st.word, st.result?.guess, JSON.stringify(st.vote)].join("|");
     // Only rebuild the input area when the phase changes, so typing isn't wiped by other players' updates.
     if (key !== phaseKey) {
       phaseKey = key;
@@ -310,6 +441,29 @@
                    : `<p class="muted center">Waiting for the host…</p>`);
     }
 
+    if (st.waiting && st.status !== "reveal") {
+      return `<p class="center">You joined mid-game. You'll be dealt in at the start of the next round.</p>${hostSkip}`;
+    }
+
+    if (st.status === "vote") {
+      if (st.isGuesser) return `<p class="muted">The clue givers are deciding which clues to hide. Wait for them to lock in.</p>${hostSkip}`;
+      const v = st.vote || {};
+      if (!v.isVoter) return `<p class="muted">The clue givers are voting on which clues to hide…</p>${hostSkip}`;
+      const rows = (st.clues || []).map((c) => {
+        const mine = v.mine.includes(c.index);
+        const btn = v.locked
+          ? `<span class="muted">${mine ? "marked hide" : "keep"}</span>`
+          : `<button class="vote-btn ${mine ? "hide-on" : "alt"}" data-vote="${c.index}" data-hide="${mine ? 0 : 1}">${mine ? "Hiding ✓" : "Hide"}</button>`;
+        return `<div class="vote-row"><span class="${c.valid ? "" : "dup"}">${esc(c.text)}</span>${btn}</div>`;
+      }).join("");
+      const footer = v.locked
+        ? `<p class="muted center">Vote locked. Waiting for ${v.voterCount - v.lockedCount} more clue giver${v.voterCount - v.lockedCount === 1 ? "" : "s"}…</p>`
+        : `<button id="lockVoteBtn">Lock in vote</button>`;
+      return `<p class="muted">Hide any clue the guesser shouldn't see. A clue is hidden if more than half of the clue givers vote to hide it.</p>
+        ${rows || `<p class="muted">No clues this round.</p>`}
+        ${footer}${hostSkip}`;
+    }
+
     if (st.status === "clue") {
       if (st.isGuesser) return `<p class="muted">You're guessing this round. Waiting for clues…</p>${hostSkip}`;
       if (me.submitted) return `<p class="muted">Clue sent. Waiting for the others…</p>${hostSkip}`;
@@ -321,15 +475,20 @@
 
     if (st.status === "guess") {
       if (st.isGuesser) {
-        return `<p class="muted">Use the clues to guess the word.</p>
+        return `<p class="muted">${st.live
+            ? "Look at the clues on the clue givers' phones. Type your guess, or tap Right or Wrong."
+            : "Use the clues to guess the word."}</p>
           <input id="guessIn" maxlength="30" placeholder="Your guess" autocomplete="off">
-          <button id="guessBtn">Lock in guess</button>${hostSkip}`;
+          <button id="guessBtn">Lock in guess</button>
+          ${st.live ? `<button id="rightBtn" class="good">Right ✓</button><button id="wrongBtn" class="bad">Wrong ✗</button>` : ""}
+          ${hostSkip}`;
       }
       return `<p class="muted">Waiting for ${esc(st.guesserName)} to guess…</p>${hostSkip}`;
     }
 
     const r = st.result || {};
-    const verdict = r.skipped ? "Round skipped" : r.correct ? "Correct!" : `Not quite. Guessed: ${esc(r.guess)}`;
+    const verdict = r.skipped ? "Round skipped" : r.correct ? "Correct!"
+      : r.guess ? `Not quite. Guessed: ${esc(r.guess)}` : "Not this time.";
     return `<p class="muted center">The word was</p>
       <div class="big">${esc(st.word)}</div>
       <p class="center">${verdict}</p>
@@ -344,6 +503,10 @@
       box.innerHTML = `<div class="muted">Clues stay hidden until everyone has sent one.</div>`;
       return;
     }
+    if (st.status === "vote") {
+      box.innerHTML = `<div class="muted">Clue givers are voting on which clues to hide.</div>`;
+      return;
+    }
     if (!st.clues) { box.innerHTML = ""; return; }
     // During the clue and guess phases the guesser never sees duplicate clues.
     // Once the round ends, everyone (guesser included) sees the full list with duplicates marked.
@@ -351,20 +514,43 @@
     const shown = hideDups ? st.clues.filter((c) => c.valid) : st.clues;
     if (shown.length === 0) { box.innerHTML = `<div class="muted">No clues this round.</div>`; return; }
     box.innerHTML = `<div class="muted">Clues</div><ul>` +
-      shown.map((c) =>
-        `<li class="${c.valid ? "" : "dup"}"><span>${esc(c.text)}</span>` +
-        `<span class="muted">${c.valid ? esc(c.name || "") : "duplicate"}</span></li>`
-      ).join("") + `</ul>`;
+      shown.map((c) => {
+        const tag = c.hidden ? "hidden by vote" : c.valid ? esc(c.name || "") : "duplicate";
+        return `<li class="${c.valid && !c.hidden ? "" : "dup"}"><span>${esc(c.text)}</span>` +
+          `<span class="muted">${tag}</span></li>`;
+      }).join("") + `</ul>`;
   }
 
   function renderPlayers() {
     $("gamePlayers").innerHTML = st.players.map((p) => {
       let tag = "";
       if (p.id === st.guesserId) tag = "guessing";
+      else if (p.waiting && st.status !== "lobby") tag = "joins next round";
+      else if (st.status === "vote" && p.submitted) tag = p.locked ? "vote locked" : "voting…";
       else if (st.status === "clue") tag = p.submitted ? "clue sent" : "writing clue…";
       const suffix = (p.id === st.meId ? " (you)" : "") + (p.connected ? "" : " (offline)");
       return `<li><span>${esc(p.name)}${suffix}</span><span class="muted">${tag}</span></li>`;
     }).join("");
+  }
+
+  // In person mode: while the guesser is guessing, each clue giver's phone shows their own clue.
+  function renderShow() {
+    const el = $("showStage");
+    const on = !!st && st.live && st.status === "guess" && !st.isGuesser && !st.waiting;
+    el.classList.toggle("hidden", !on);
+    if (!on) return;
+    const c = st.myClue;
+    const out = c && (!c.valid || c.hidden);
+    const note = !c ? "" : c.hidden
+      ? "Voted out: the guesser won't see this clue."
+      : !c.valid ? "Crossed out: it matches another clue or the secret word." : "";
+    const body = !c
+      ? `<div class="show-note">You didn't send a clue this round.</div>`
+      : `<div class="show-clue ${out ? "struck" : ""}">${esc(c.text)}</div>` +
+        (note ? `<div class="show-note">${note}</div>` : "");
+    const skip = st.isHost ? `<button id="skipLive" class="alt">Skip round</button>` : "";
+    el.innerHTML = `<div class="turn-hint">Turn your phone sideways to show your clue</div>
+      <div class="show-body">${body}${skip}</div>`;
   }
 
   // Countdown. A clue typed but not sent is submitted automatically when time hits zero.
