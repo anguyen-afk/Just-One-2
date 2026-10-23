@@ -56,17 +56,18 @@
   #showStage{position:fixed;inset:0;z-index:50;background:#1b1f2a;color:#fff;display:flex;flex-direction:column;overflow:auto}
   #showStage .turn-hint{display:none;text-align:center;font-size:14px;color:#9fb6e8;padding:10px}
   #showStage .show-body{flex:1;display:flex;flex-direction:column;justify-content:center;align-items:center;gap:14px;padding:20px;text-align:center}
-  #showStage .show-clue{font-size:clamp(28px,min(14vw,16vh),120px);font-weight:700;line-height:1.1;word-break:break-word}
+  #showStage .show-clue{font-family:system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;font-weight:900;line-height:1;white-space:nowrap;display:inline-block;font-size:30vh}
   #showStage .show-clue.struck{text-decoration:line-through;color:#7f8694}
   #showStage .show-note{font-size:16px;color:#f0b4ab}
   #showStage button{width:auto;padding:10px 18px;margin-top:12px}
+  #showStage input{max-width:320px;text-align:center;font-size:20px}
 
   /* Share overlay: QR code, web address and room code */
   #shareModal{position:fixed;inset:0;z-index:60;background:#000a;display:flex;align-items:center;justify-content:center;padding:20px}
   #shareModal .card{width:100%;max-width:340px;margin:0;text-align:center}
   #shareUrl{word-break:break-all;font-size:14px;margin:6px 0 10px}
   @media (orientation: portrait){ #showStage .turn-hint{display:block} }
-  @media (orientation: landscape){ #showStage .show-body{flex-direction:row;flex-wrap:wrap} }
+  @media (orientation: landscape){ #showStage .show-body{flex-direction:column} }
 </style>
 </head>
 <body>
@@ -256,6 +257,14 @@
     rightBtn: () => socket.emit("judge", { correct: true }),
     wrongBtn: () => socket.emit("judge", { correct: false }),
     skipLive: () => socket.emit("skip"),
+    revealBtn: () => socket.emit("reveal"),
+    revealLive: () => socket.emit("reveal"),
+    newWordBtn: () => {
+      if (!confirm("Use a different word? Clue givers will send new clues.")) return;
+      socket.emit("newWord", {}, (res) => { if (res && !res.ok) alert(res.error); });
+    },
+    changeClueBtn: () => sendNewClue("newClueIn"),
+    changeClueLiveBtn: () => sendNewClue("newClueInLive"),
     lockVoteBtn: () => socket.emit("lockVote"),
     leaveBtn: () => {
       if (!confirm("Leave this room?")) return;
@@ -281,6 +290,7 @@
     if (e.target.id === "clueIn") handlers.clueBtn();
     else if (e.target.id === "guessIn") handlers.guessBtn();
     else if (e.target.id === "code") handlers.joinBtn();
+    else if (e.target.id === "newClueIn" || e.target.id === "newClueInLive") sendNewClue(e.target.id);
   });
 
   // On every (re)connect, try to take our old seat back.
@@ -302,6 +312,16 @@
     store.set(roomKey, s.code);
     render();
   });
+
+  // Replaces a revealed clue with a different word. Errors are shown in an alert so they stay visible in person mode.
+  function sendNewClue(inputId) {
+    const t = $(inputId)?.value.trim();
+    if (!t) return;
+    socket.emit("changeClue", { text: t }, (res) => {
+      if (!res || !res.ok) return alert(res?.error || "Couldn't change the clue.");
+      if ($(inputId)) $(inputId).value = "";
+    });
+  }
 
   function proposeToPlayers(type) {
     socket.emit("poll", { type }, (res) => { if (res && !res.ok) showErr(res.error); });
@@ -418,7 +438,7 @@
     $("scoreInfo").textContent = `Score ${st.score}`;
     $("endGameBtn").classList.toggle("hidden", st.status === "over");
     const me = st.players.find((p) => p.id === st.meId) || {};
-    const key = [st.status, st.round, st.isGuesser, st.isHost, st.waiting, me.submitted, st.word, st.result?.guess, JSON.stringify(st.vote)].join("|");
+    const key = [st.status, st.round, st.isGuesser, st.isHost, st.waiting, me.submitted, st.word, st.result?.guess, JSON.stringify(st.vote), JSON.stringify(st.myClue)].join("|");
     // Only rebuild the input area when the phase changes, so typing isn't wiped by other players' updates.
     if (key !== phaseKey) {
       phaseKey = key;
@@ -481,9 +501,18 @@
           <input id="guessIn" maxlength="30" placeholder="Your guess" autocomplete="off">
           <button id="guessBtn">Lock in guess</button>
           ${st.live ? `<button id="rightBtn" class="good">Right ✓</button><button id="wrongBtn" class="bad">Wrong ✗</button>` : ""}
+          <button id="newWordBtn" class="alt">Different word</button>
           ${hostSkip}`;
       }
-      return `<p class="muted">Waiting for ${esc(st.guesserName)} to guess…</p>${hostSkip}`;
+      const mc = st.myClue;
+      const note = mc && mc.canReveal
+        ? `<p class="center">Your clue matches another clue, so it was voted hidden.</p><button id="revealBtn" class="alt">Reveal my clue anyway</button>`
+        : mc && mc.canChange
+          ? `<p class="center muted">You can replace your clue with a different one.</p>
+             <input id="newClueIn" maxlength="30" placeholder="A different one-word clue" autocomplete="off">
+             <button id="changeClueBtn" class="alt">Show different clue</button>`
+          : "";
+      return `<p class="muted">Waiting for ${esc(st.guesserName)} to guess…</p>${note}${hostSkip}`;
     }
 
     const r = st.result || {};
@@ -511,11 +540,11 @@
     // During the clue and guess phases the guesser never sees duplicate clues.
     // Once the round ends, everyone (guesser included) sees the full list with duplicates marked.
     const hideDups = st.isGuesser && ["clue", "guess"].includes(st.status);
-    const shown = hideDups ? st.clues.filter((c) => c.valid) : st.clues;
+    const shown = hideDups ? st.clues.filter((c) => c.valid || c.revealed) : st.clues;
     if (shown.length === 0) { box.innerHTML = `<div class="muted">No clues this round.</div>`; return; }
     box.innerHTML = `<div class="muted">Clues</div><ul>` +
       shown.map((c) => {
-        const tag = c.hidden ? "hidden by vote" : c.valid ? esc(c.name || "") : "duplicate";
+        const tag = c.hidden ? "hidden by vote" : c.revealed ? "duplicate, shown anyway" : c.valid ? esc(c.name || "") : "duplicate";
         return `<li class="${c.valid && !c.hidden ? "" : "dup"}"><span>${esc(c.text)}</span>` +
           `<span class="muted">${tag}</span></li>`;
       }).join("") + `</ul>`;
@@ -540,18 +569,44 @@
     el.classList.toggle("hidden", !on);
     if (!on) return;
     const c = st.myClue;
-    const out = c && (!c.valid || c.hidden);
-    const note = !c ? "" : c.hidden
-      ? "Voted out: the guesser won't see this clue."
+    const out = c && (!c.valid || c.hidden) && !c.revealed;
+    const note = !c ? "" : c.revealed
+      ? "Shown anyway: the guesser will see this clue."
+      : c.hidden ? "Voted out: the guesser won't see this clue."
       : !c.valid ? "Crossed out: it matches another clue or the secret word." : "";
+    const reveal = c && c.canReveal ? `<button id="revealLive" class="alt">Show it anyway</button>` : "";
     const body = !c
       ? `<div class="show-note">You didn't send a clue this round.</div>`
       : `<div class="show-clue ${out ? "struck" : ""}">${esc(c.text)}</div>` +
-        (note ? `<div class="show-note">${note}</div>` : "");
+        (note ? `<div class="show-note">${note}</div>` : "") + reveal;
+    const change = c && c.canChange
+      ? `<input id="newClueInLive" maxlength="30" placeholder="A different one-word clue" autocomplete="off"><button id="changeClueLiveBtn" class="alt">Show different clue</button>`
+      : "";
+    const typed = $("newClueInLive")?.value || "";
     const skip = st.isHost ? `<button id="skipLive" class="alt">Skip round</button>` : "";
     el.innerHTML = `<div class="turn-hint">Turn your phone sideways to show your clue</div>
-      <div class="show-body">${body}${skip}</div>`;
+      <div class="show-body">${body}${change}${skip}</div>`;
+    if ($("newClueInLive")) $("newClueInLive").value = typed;
+    fitClue();
   }
+
+  // Sizes the clue as large as it can go while still fitting the screen.
+  function fitClue() {
+    const el = document.querySelector("#showStage .show-clue");
+    if (!el) return;
+    const body = el.parentElement;
+    const others = [...body.children].filter((c) => c !== el).reduce((h, c) => h + c.offsetHeight, 0);
+    const maxW = window.innerWidth * 0.94;
+    const maxH = window.innerHeight * 0.94 - others - 40;
+    let lo = 8, hi = 1000;
+    for (let i = 0; i < 14; i++) {
+      const mid = (lo + hi) / 2;
+      el.style.fontSize = mid + "px";
+      if (el.offsetWidth > maxW || el.offsetHeight > maxH) hi = mid; else lo = mid;
+    }
+    el.style.fontSize = lo + "px";
+  }
+  window.addEventListener("resize", fitClue);
 
   // Countdown. A clue typed but not sent is submitted automatically when time hits zero.
   setInterval(() => {
