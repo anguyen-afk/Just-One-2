@@ -254,7 +254,14 @@ function myClueOf(room, pid) {
   if (!room.finalClues) return null;
   const idx = [...room.clues.keys()].indexOf(pid);
   const c = idx >= 0 ? room.finalClues[idx] : null;
-  return c ? { text: c.text, valid: c.valid, hidden: room.hidden.has(idx) } : null;
+  if (!c) return null;
+  const hidden = room.hidden.has(idx);
+  const revealed = room.revealAnyway.has(idx);
+  return {
+    text: c.text, valid: c.valid, hidden, revealed,
+    canReveal: room.status === "guess" && !c.valid && hidden && !revealed,
+    canChange: room.status === "guess" && (!hidden || revealed),
+  };
 }
 
 // What each viewer sees of the clues. The guesser never sees clues during voting,
@@ -268,12 +275,16 @@ function clueListFor(room, isGuesser) {
   }
   if (room.status === "guess" && !room.settings.live) {
     return list
-      .map((c, i) => ({ text: c.text, valid: c.valid, name: null, hidden: false, i }))
-      .filter((c) => !room.hidden.has(c.i))
+      .map((c, i) => ({ text: c.text, valid: c.valid, name: null, hidden: false, revealed: room.revealAnyway.has(i), i }))
+      .filter((c) => !room.hidden.has(c.i) || c.revealed)
       .map(({ i, ...c }) => c);
   }
   if (revealed) {
-    return list.map((c, i) => ({ text: c.text, valid: c.valid, name: c.name, hidden: room.hidden.has(i) }));
+    return list.map((c, i) => ({
+      text: c.text, valid: c.valid, name: c.name,
+      hidden: room.hidden.has(i) && !room.revealAnyway.has(i),
+      revealed: room.revealAnyway.has(i),
+    }));
   }
   return null;
 }
@@ -320,7 +331,7 @@ function view(room, pid) {
     // In person mode, clue texts stay on the clue givers' phones until the round is revealed.
     clues: clueListFor(room, isGuesser),
     vote: voteInfo(room, pid),
-    myClue: s.live && room.status === "guess" && !isGuesser ? myClueOf(room, pid) : null,
+    myClue: room.status === "guess" && !isGuesser ? myClueOf(room, pid) : null,
     result: room.result,
     clueSeconds: s.clueSeconds,
     msLeft: room.status === "clue" && room.deadline ? Math.max(0, room.deadline - Date.now()) : null,
@@ -364,20 +375,23 @@ function nextGuesser(room) {
   return ready[0];
 }
 
-function startRound(room) {
+// reroll: the guesser picked a different word. Same round, same guesser, and the clues are
+// sent again for the new word.
+function startRound(room, { reroll = false } = {}) {
   const pool = buildPool(room).filter((w) => !room.usedWords.has(w));
   room.word = pool[Math.floor(Math.random() * pool.length)];
   room.usedWords.add(room.word);
-  room.round += 1;
+  if (!reroll) room.round += 1;
   room.clues = new Map();
   room.finalClues = null;
   room.result = null;
   room.votes = new Map();
   room.locked = new Set();
   room.hidden = new Set();
+  room.revealAnyway = new Set();
   // Everyone who joined mid-game is seated from this round on.
   room.players.forEach((p) => { p.waiting = false; });
-  room.guesserId = nextGuesser(room)?.id ?? null;
+  if (!reroll) room.guesserId = nextGuesser(room)?.id ?? null;
   room.status = "clue";
   startClueTimer(room);
   broadcast(room);
@@ -453,7 +467,7 @@ function resetToLobby(room) {
   Object.assign(room, {
     status: "lobby", round: 0, score: 0, guesserId: null, word: null,
     usedWords: new Set(), clues: new Map(), finalClues: null, result: null, deadline: null,
-    votes: new Map(), locked: new Set(), hidden: new Set(), poll: null,
+    votes: new Map(), locked: new Set(), hidden: new Set(), revealAnyway: new Set(), poll: null,
   });
 }
 
@@ -544,6 +558,7 @@ io.on("connection", (socket) => {
         votes: new Map(),   // clue giver id -> Set of clue indexes they want hidden
         locked: new Set(),  // clue givers who have locked in their vote
         hidden: new Set(),  // clue indexes hidden from the guesser by majority vote
+        revealAnyway: new Set(), // hidden duplicate clues their giver chose to show anyway
         result: null,
         deadline: null,
       };
@@ -683,6 +698,51 @@ io.on("connection", (socket) => {
     if (ok) room.score += 1;
     room.status = "reveal";
     broadcast(room);
+  });
+
+  // A clue giver whose duplicate clue was voted hidden can choose to show it to the guesser anyway.
+  socket.on("reveal", () => {
+    const room = myRoom;
+    if (!room || room.status !== "guess") return;
+    const p = find(room, myPid);
+    const idx = p ? [...room.clues.keys()].indexOf(p.id) : -1;
+    const c = idx >= 0 ? room.finalClues[idx] : null;
+    if (!c || c.valid || !room.hidden.has(idx)) return;
+    room.revealAnyway.add(idx);
+    broadcast(room);
+  });
+
+  // During the guess, a clue giver can replace their clue with a different word, unless the
+  // group voted it hidden (a hidden duplicate must be revealed first). The new word must not
+  // match the secret word or any other clue, so it is always valid.
+  socket.on("changeClue", ({ text } = {}, cb = () => {}) => {
+    const room = myRoom;
+    const p = room && find(room, myPid);
+    if (!room || room.status !== "guess" || !p) return cb({ ok: false, error: "Clues can only be changed during the guess." });
+    const idx = [...room.clues.keys()].indexOf(p.id);
+    if (idx < 0 || (room.hidden.has(idx) && !room.revealAnyway.has(idx))) {
+      return cb({ ok: false, error: "This clue was voted hidden. Reveal it first." });
+    }
+    const word = clean(text, 30).split(/\s+/)[0] || "";
+    const k = norm(word);
+    if (!k) return cb({ ok: false, error: "Enter a one-word clue." });
+    if (k === norm(room.word)) return cb({ ok: false, error: "That's the secret word. Try a different clue." });
+    const others = [...room.clues.entries()].filter(([pid]) => pid !== p.id);
+    if (others.some(([, t]) => sameIdea(k, norm(t)))) return cb({ ok: false, error: "That matches another clue. Try a different word." });
+    room.clues.set(p.id, word);
+    room.finalClues[idx] = { name: room.finalClues[idx].name, text: word, valid: true };
+    cb({ ok: true });
+    broadcast(room);
+  });
+
+  // The guesser can swap the secret word during the guess. It isn't a skipped round.
+  socket.on("newWord", (_, cb = () => {}) => {
+    const room = myRoom;
+    if (!room || room.status !== "guess" || myPid !== room.guesserId) return cb({ ok: false, error: "Only the guesser can do this now." });
+    const left = buildPool(room).filter((w) => !room.usedWords.has(w)).length;
+    if (left === 0) return cb({ ok: false, error: "There are no other words left." });
+    cb({ ok: true });
+    startRound(room, { reroll: true });
   });
 
   socket.on("next", () => {
