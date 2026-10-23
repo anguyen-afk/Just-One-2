@@ -143,9 +143,24 @@ const CATEGORIES = {
   ],
 };
 
+// Extra categories: every wordlists/<name>.txt becomes a category called <name>.
+// One word per line. Lines starting with # are comments. Restart the server after editing.
+const fs = require("fs");
+const WORDLIST_DIR = path.join(__dirname, "wordlists");
+const OPT_IN = new Set(["mature"]); // categories left out of "All words" (host must pick them)
+if (fs.existsSync(WORDLIST_DIR)) {
+  for (const file of fs.readdirSync(WORDLIST_DIR).sort()) {
+    if (!file.endsWith(".txt")) continue;
+    const name = path.basename(file, ".txt");
+    const words = fs.readFileSync(path.join(WORDLIST_DIR, file), "utf8")
+      .split(/\r?\n/).map((s) => s.trim()).filter((s) => s && !s.startsWith("#"));
+    if (words.length) CATEGORIES[name] = words;
+  }
+}
+
 const ALL_WORDS = (() => {
   const seen = new Set();
-  return Object.values(CATEGORIES).flat().filter((w) => {
+  return Object.entries(CATEGORIES).filter(([name]) => !OPT_IN.has(name)).flatMap(([, w]) => w).filter((w) => {
     const k = w.toLowerCase();
     if (seen.has(k)) return false;
     seen.add(k);
