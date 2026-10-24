@@ -204,10 +204,11 @@ const cleanPid = (v) => (/^[\w-]{8,64}$/.test(String(v)) ? String(v) : null);
 const getRoom = (code) => rooms.get(String(code || "").trim().toUpperCase());
 const find = (room, pid) => room.players.find((p) => p.id === pid);
 const active = (room) => room.players.filter((p) => p.connected);
+const humansActive = (room) => active(room).filter((p) => !p.ai);
 // Players who take part in rounds. Late joiners are "waiting" until the next round starts.
 const seated = (room) => active(room).filter((p) => !p.waiting);
 const givers = (room) => seated(room).filter((p) => p.id !== room.guesserId);
-const votersOf = (room) => givers(room).filter((p) => room.clues.has(p.id));
+const votersOf = (room) => givers(room).filter((p) => !p.ai && room.clues.has(p.id));
 
 function makeCode() {
   let code;
@@ -261,6 +262,7 @@ function applySettings(room, s) {
   if (CATEGORY_KEYS.includes(s.category)) room.settings.category = s.category;
   if (typeof s.customWords === "string") room.settings.customWords = parseWords(s.customWords);
   if (typeof s.live === "boolean") room.settings.live = s.live;
+  if (["claude", "offline"].includes(s.aiEngine)) room.settings.aiEngine = s.aiEngine;
 }
 
 // Returns the clue a player wrote this round (and whether it survived the duplicate check).
@@ -286,11 +288,19 @@ function clueListFor(room, isGuesser) {
   const revealed = room.status === "reveal" || room.status === "over";
   if (room.status === "vote") {
     if (isGuesser) return null;
-    return list.map((c, i) => ({ index: i, text: c.text, valid: c.valid, name: null, hidden: false }));
+    return list.map((c, i) => ({ index: i, text: c.text, valid: c.valid, name: c.name, hidden: false }));
+  }
+  if (room.status === "guess" && room.settings.live) {
+    // In person mode the guesser sees only the AI's clues; human clues stay on their phones.
+    if (!isGuesser) return null;
+    return list
+      .map((c, i) => ({ text: c.text, valid: c.valid, name: c.name, hidden: false, revealed: false, ai: c.ai, i }))
+      .filter((c) => c.ai && c.valid && !room.hidden.has(c.i))
+      .map(({ i, ...c }) => c);
   }
   if (room.status === "guess" && !room.settings.live) {
     return list
-      .map((c, i) => ({ text: c.text, valid: c.valid, name: null, hidden: false, revealed: room.revealAnyway.has(i), i }))
+      .map((c, i) => ({ text: c.text, valid: c.valid, name: c.name, hidden: false, revealed: room.revealAnyway.has(i), i }))
       .filter((c) => !room.hidden.has(c.i) || c.revealed)
       .map(({ i, ...c }) => c);
   }
@@ -338,6 +348,7 @@ function view(room, pid) {
     poll: room.poll ? pollInfo(room, pid) : null,
     isHost,
     hostId: room.hostId,
+    aiClaudeReady: !!process.env.ANTHROPIC_API_KEY,
     guesserId: room.guesserId,
     guesserName: find(room, room.guesserId)?.name || null,
     isGuesser,
@@ -346,6 +357,7 @@ function view(room, pid) {
     // In person mode, clue texts stay on the clue givers' phones until the round is revealed.
     clues: clueListFor(room, isGuesser),
     vote: voteInfo(room, pid),
+    clueText: room.status === "clue" ? room.clues.get(pid) || null : null,
     myClue: room.status === "guess" && !isGuesser ? myClueOf(room, pid) : null,
     result: room.result,
     clueSeconds: s.clueSeconds,
@@ -358,6 +370,7 @@ function view(room, pid) {
       customWords: isHost ? s.customWords : [],
       customCount: s.customWords.length,
       live: s.live,
+      aiEngine: s.aiEngine,
     },
     players: room.players.map((p) => ({
       id: p.id,
@@ -365,7 +378,9 @@ function view(room, pid) {
       connected: p.connected,
       waiting: !!p.waiting,
       locked: room.locked.has(p.id),
+      clueLocked: room.clueLocked.has(p.id),
       submitted: room.clues.has(p.id),
+      ai: !!p.ai,
     })),
   };
 }
@@ -376,11 +391,116 @@ function broadcast(room) {
   }
 }
 
+// ---------- AI players ----------
+// An AI player has no phone. It writes its clue as soon as a round starts, using the Claude API
+// (if the host picked it and the server has ANTHROPIC_API_KEY) or the built-in offline list.
+const AI_TRIES = 3; // Claude attempts before falling back to the offline list
+const AI_TIMEOUT_MS = 8000;
+const AI_MODEL = process.env.AI_MODEL || "claude-haiku-5-5";
+// Offline clue suggestions. Each secret word maps to words a teammate could link to it.
+// Entries that are not in the word list are simply never used.
+const ASSOCIATIONS = {
+  Apple: ["Fruit", "Orchard", "Pie"], Bridge: ["River", "Span", "Tunnel"], Cloud: ["Sky", "Storm", "Fluffy"],
+  Dragon: ["Fire", "Castle", "Scales"], Forest: ["Trees", "Woods", "Moss"], Ghost: ["Haunted", "Spooky", "Phantom"],
+  Island: ["Beach", "Palm", "Lagoon"], Pirate: ["Ship", "Treasure", "Parrot"], Rocket: ["Launch", "Space", "Fuel"],
+  Volcano: ["Lava", "Eruption", "Ash"], Umbrella: ["Rain", "Shelter", "Parasol"], Castle: ["Knight", "Moat", "Throne"],
+  Ocean: ["Sea", "Waves", "Salt"], Lion: ["Mane", "Savanna", "Roar"], Pizza: ["Cheese", "Slice", "Oven"],
+  Burger: ["Patty", "Fries", "Bun"], Taco: ["Tortilla", "Salsa", "Mexican"], Sushi: ["Rice", "Japan", "Roll"],
+  Coffee: ["Espresso", "Mug", "Caffeine"], Piano: ["Keys", "Concert", "Melody"], Guitar: ["Strings", "Chord", "Acoustic"],
+  Doctor: ["Hospital", "Medicine", "Clinic"], Chef: ["Kitchen", "Recipe", "Cook"], Pilot: ["Cockpit", "Flight", "Wings"],
+  Teacher: ["School", "Lesson", "Class"], Sofa: ["Couch", "Living", "Cushion"], Clock: ["Time", "Hands", "Tick"],
+  Wizard: ["Magic", "Spell", "Beard"], Mermaid: ["Sea", "Tail", "Siren"], Airplane: ["Jet", "Runway", "Airport"],
+  Car: ["Engine", "Road", "Wheels"], Train: ["Track", "Station", "Rail"], Birthday: ["Cake", "Candles", "Party"],
+  Wedding: ["Bride", "Ring", "Vows"], Halloween: ["Pumpkin", "Costume", "October"], Snowman: ["Carrot", "Frosty", "Winter"],
+  Rain: ["Puddle", "Storm", "Cloudy"], Snow: ["Winter", "Flake", "Cold"], Penguin: ["Antarctica", "Ice", "Tux"],
+  Elephant: ["Trunk", "Ivory", "Safari"], Telescope: ["Stars", "Lens", "Astronomy"], Vampire: ["Bite", "Blood", "Dracula"],
+  Robot: ["Metal", "Circuit", "Android"], Skeleton: ["Bones", "Spine", "Halloween"], Bicycle: ["Pedal", "Wheels", "Bike"],
+};
+
+// Picks an offline clue: a listed association first, then a word from the same category,
+// then any word from the game's words. It skips anything that matches the secret word or a clue already given.
+function offlineClue(room, secret) {
+  const k = norm(secret);
+  const taken = [...room.clues.values()].map(norm);
+  const usable = (w) => {
+    const n = norm(w);
+    return !!n && !sameIdea(n, k) && !taken.some((t) => sameIdea(n, t));
+  };
+  const shuffled = (list) => [...list].sort(() => Math.random() - 0.5);
+  const category = Object.values(CATEGORIES).find((ws) => ws.includes(secret)) || [];
+  const candidates = [...(ASSOCIATIONS[secret] || []), ...shuffled(category), ...shuffled(ALL_WORDS)];
+  return candidates.find(usable) || "Hmm";
+}
+
+// Asks Claude for one clue word. Throws on network, timeout or HTTP errors.
+async function askClaude(secret) {
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-api-key": process.env.ANTHROPIC_API_KEY,
+      "anthropic-version": "2023-06-01",
+    },
+    body: JSON.stringify({
+      model: AI_MODEL,
+      max_tokens: 20,
+      messages: [{
+        role: "user",
+        content: `You are playing the party game Just One. The secret word is "${secret}". ` +
+          `Give exactly one English word that helps a teammate guess the secret word. ` +
+          `Do not use the secret word or any form of it. Do not use spaces, hyphens or punctuation. ` +
+          `Reply with the single word only.`,
+      }],
+    }),
+    signal: AbortSignal.timeout(AI_TIMEOUT_MS),
+  });
+  if (!res.ok) throw new Error(`Claude API responded ${res.status}`);
+  const data = await res.json();
+  const text = (data.content || []).filter((b) => b.type === "text").map((b) => b.text).join(" ");
+  return text.trim().split(/\s+/)[0].replace(/[^A-Za-z]/g, "");
+}
+
+function validAIWord(word, secret) {
+  const n = norm(word);
+  return /^[a-z]{2,30}$/.test(n) && !sameIdea(n, norm(secret));
+}
+
+async function makeAIClue(room, secret) {
+  if (room.settings.aiEngine === "claude" && process.env.ANTHROPIC_API_KEY) {
+    for (let i = 0; i < AI_TRIES; i++) {
+      try {
+        const word = await askClaude(secret);
+        if (validAIWord(word, secret)) return word;
+      } catch (e) {
+        break; // API unavailable: use the offline list instead
+      }
+    }
+  }
+  return offlineClue(room, secret);
+}
+
+// Starts writing clues for every AI giver. Each clue is locked in as soon as it is ready, so the
+// round can move on. A token guards against a clue arriving after the round has already changed.
+function scheduleAIClues(room) {
+  const token = (room.aiToken = (room.aiToken || 0) + 1);
+  const word = room.word;
+  for (const p of givers(room).filter((x) => x.ai)) {
+    makeAIClue(room, word).then((text) => {
+      if (room.aiToken !== token || room.status !== "clue" || room.word !== word) return;
+      if (room.clueLocked.has(p.id)) return;
+      room.clues.set(p.id, text);
+      room.clueLocked.add(p.id);
+      finishClues(room);
+      broadcast(room);
+    });
+  }
+}
+
 // ---------- round flow ----------
 // The next guesser is the next seated player after the previous guesser, in seat order.
 // Newcomers take their place at the end of the seat order, so nobody guesses twice in a row.
 function nextGuesser(room) {
-  const ready = seated(room);
+  const ready = seated(room).filter((p) => !p.ai);
   if (ready.length === 0) return null;
   const i = room.players.findIndex((p) => p.id === room.guesserId);
   for (let k = 1; k <= room.players.length; k++) {
@@ -398,6 +518,7 @@ function startRound(room, { reroll = false } = {}) {
   room.usedWords.add(room.word);
   if (!reroll) room.round += 1;
   room.clues = new Map();
+  room.clueLocked = new Set();
   room.finalClues = null;
   room.result = null;
   room.votes = new Map();
@@ -410,6 +531,7 @@ function startRound(room, { reroll = false } = {}) {
   room.status = "clue";
   startClueTimer(room);
   broadcast(room);
+  scheduleAIClues(room);
 }
 
 function startClueTimer(room) {
@@ -428,7 +550,7 @@ function startClueTimer(room) {
 function finishClues(room, force = false) {
   if (room.status !== "clue") return;
   const g = givers(room);
-  const allIn = g.length > 0 && g.every((p) => room.clues.has(p.id));
+  const allIn = g.length > 0 && g.every((p) => room.clueLocked.has(p.id));
   if (!allIn && !force) return;
 
   clearTimeout(room.timer);
@@ -445,6 +567,7 @@ function finishClues(room, force = false) {
     const dupe = entries.some((o) => o !== e && sameIdea(e.k, o.k));
     return {
       name: find(room, e.pid)?.name || "?",
+      ai: !!find(room, e.pid)?.ai,
       text: e.text,
       valid: !dupe && e.k !== norm(room.word),
     };
@@ -481,7 +604,7 @@ function resetToLobby(room) {
   room.players.forEach((p) => { p.waiting = false; });
   Object.assign(room, {
     status: "lobby", round: 0, score: 0, guesserId: null, word: null,
-    usedWords: new Set(), clues: new Map(), finalClues: null, result: null, deadline: null,
+    usedWords: new Set(), clues: new Map(), clueLocked: new Set(), finalClues: null, result: null, deadline: null,
     votes: new Map(), locked: new Set(), hidden: new Set(), revealAnyway: new Set(), poll: null,
   });
 }
@@ -491,7 +614,7 @@ function resetToLobby(room) {
 function checkPoll(room) {
   const poll = room.poll;
   if (!poll) return;
-  const voters = active(room);
+  const voters = humansActive(room);
   const n = voters.length;
   const yes = voters.filter((p) => poll.votes.get(p.id) === true).length;
   const no = voters.filter((p) => poll.votes.get(p.id) === false).length;
@@ -504,7 +627,7 @@ function checkPoll(room) {
 }
 
 function pollInfo(room, pid) {
-  const voters = active(room);
+  const voters = humansActive(room);
   const n = voters.length;
   const yes = voters.filter((p) => room.poll.votes.get(p.id) === true).length;
   return {
@@ -518,13 +641,14 @@ function pollInfo(room, pid) {
 }
 
 function afterDrop(room) {
-  if (active(room).length === 0) {
+  const humans = humansActive(room);
+  if (humans.length === 0) {
     clearTimeout(room.timer);
     room.cleanup = setTimeout(() => rooms.delete(room.code), ROOM_GRACE_MS);
     return;
   }
   const host = find(room, room.hostId);
-  if (!host || !host.connected) room.hostId = active(room)[0].id;
+  if (!host || !host.connected) room.hostId = humans[0].id;
   finishClues(room);
   checkVotes(room);
   checkPoll(room);
@@ -559,7 +683,7 @@ io.on("connection", (socket) => {
         founderId: id,
         hostId: id,
         players: [{ id, name: n, sock: null, connected: true }],
-        settings: { clueSeconds: 0, wordMode: "builtin", category: "all", customWords: [], live: false },
+        settings: { clueSeconds: 0, wordMode: "builtin", category: "all", customWords: [], live: false, aiEngine: "offline" },
         status: "lobby",
         round: 0,
         maxRounds: MAX_ROUNDS,
@@ -572,6 +696,7 @@ io.on("connection", (socket) => {
         poll: null,         // open proposal to end the game or start a new one
         votes: new Map(),   // clue giver id -> Set of clue indexes they want hidden
         locked: new Set(),  // clue givers who have locked in their vote
+        clueLocked: new Set(), // clue givers who have locked in their clue
         hidden: new Set(),  // clue indexes hidden from the guesser by majority vote
         revealAnyway: new Set(), // hidden duplicate clues their giver chose to show anyway
         result: null,
@@ -635,6 +760,29 @@ io.on("connection", (socket) => {
     afterDrop(room);
   });
 
+  socket.on("addAI", (_, cb = () => {}) => {
+    const room = myRoom;
+    if (!room || room.status !== "lobby" || myPid !== room.hostId) return cb({ ok: false, error: "Only the host can add AI players in the lobby." });
+    if (room.players.length >= MAX_PLAYERS) return cb({ ok: false, error: "That room is full." });
+    const taken = new Set(room.players.map((p) => p.name.toLowerCase()));
+    let n = 1;
+    while (taken.has(`ai ${n}`)) n++;
+    room.players.push({ id: `ai-${Math.random().toString(36).slice(2, 12)}`, name: `AI ${n}`, sock: null, connected: true, waiting: false, ai: true });
+    cb({ ok: true });
+    broadcast(room);
+  });
+
+  socket.on("removeAI", (_, cb = () => {}) => {
+    const room = myRoom;
+    if (!room || room.status !== "lobby" || myPid !== room.hostId) return cb({ ok: false, error: "Only the host can remove AI players in the lobby." });
+    let i = room.players.length - 1;
+    while (i >= 0 && !room.players[i].ai) i--;
+    if (i < 0) return cb({ ok: false, error: "There are no AI players to remove." });
+    room.players.splice(i, 1);
+    cb({ ok: true });
+    broadcast(room);
+  });
+
   socket.on("settings", (s) => {
     const room = myRoom;
     if (!room || room.status !== "lobby" || myPid !== room.hostId) return;
@@ -663,9 +811,23 @@ io.on("connection", (socket) => {
     if (!room || room.status !== "clue") return;
     const p = find(room, myPid);
     if (!p || !p.connected || p.waiting || p.id === room.guesserId) return;
+    if (room.clueLocked.has(p.id)) return; // locked clues can't change
     const word = clean(text, 30).split(/\s+/)[0] || "";
     if (!norm(word)) return;
     room.clues.set(p.id, word);
+    broadcast(room);
+  });
+
+  // A clue giver locks in their clue. The round moves on once everyone has locked in.
+  socket.on("lockClue", (_, cb = () => {}) => {
+    const room = myRoom;
+    const p = room && find(room, myPid);
+    if (!room || room.status !== "clue" || !p || !p.connected || p.waiting || p.id === room.guesserId) {
+      return cb({ ok: false, error: "You can't lock in right now." });
+    }
+    if (!room.clues.has(p.id)) return cb({ ok: false, error: "Send a clue first." });
+    room.clueLocked.add(p.id);
+    cb({ ok: true });
     finishClues(room);
     broadcast(room);
   });
@@ -715,6 +877,29 @@ io.on("connection", (socket) => {
     broadcast(room);
   });
 
+  // A clue giver who missed the clue time limit can still send a clue while the clues are being
+  // shown to the guesser. Voting is already over, so the new clue skips the vote: it is only
+  // crossed out if it matches another clue or the secret word, and it is never hidden by vote.
+  socket.on("lateClue", ({ text } = {}, cb = () => {}) => {
+    const room = myRoom;
+    const p = room && find(room, myPid);
+    if (!room || room.status !== "guess") return cb({ ok: false, error: "Late clues can only be added while the clues are shown." });
+    if (!p || !p.connected || p.waiting || p.id === room.guesserId || room.clues.has(p.id)) {
+      return cb({ ok: false, error: "You can't add a clue for this round." });
+    }
+    const word = clean(text, 30).split(/\s+/)[0] || "";
+    const k = norm(word);
+    if (!k) return cb({ ok: false, error: "Enter a one-word clue." });
+    const existing = room.finalClues || [];
+    const dupe = existing.some((c) => sameIdea(k, norm(c.text)));
+    const valid = !dupe && k !== norm(room.word);
+    // Appending keeps clue indexes aligned: room.clues and finalClues grow together.
+    room.clues.set(p.id, word);
+    room.finalClues = [...existing, { name: `${p.name} (late)`, text: word, valid }];
+    cb({ ok: true });
+    broadcast(room);
+  });
+
   // A clue giver whose duplicate clue was voted hidden can choose to show it to the guesser anyway.
   socket.on("reveal", () => {
     const room = myRoom;
@@ -750,10 +935,10 @@ io.on("connection", (socket) => {
     broadcast(room);
   });
 
-  // The guesser can swap the secret word during the guess. It isn't a skipped round.
+  // The guesser can swap the secret word during the clue, vote or guess stage. It isn't a skipped round.
   socket.on("newWord", (_, cb = () => {}) => {
     const room = myRoom;
-    if (!room || room.status !== "guess" || myPid !== room.guesserId) return cb({ ok: false, error: "Only the guesser can do this now." });
+    if (!room || !["clue", "vote", "guess"].includes(room.status) || myPid !== room.guesserId) return cb({ ok: false, error: "Only the guesser can do this now." });
     const left = buildPool(room).filter((w) => !room.usedWords.has(w)).length;
     if (left === 0) return cb({ ok: false, error: "There are no other words left." });
     cb({ ok: true });
