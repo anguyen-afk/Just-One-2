@@ -263,6 +263,8 @@ function applySettings(room, s) {
   if (typeof s.customWords === "string") room.settings.customWords = parseWords(s.customWords);
   if (typeof s.live === "boolean") room.settings.live = s.live;
   if (["claude", "offline"].includes(s.aiEngine)) room.settings.aiEngine = s.aiEngine;
+  const rounds = Number(s.rounds);
+  if (rounds === 0 || (Number.isInteger(rounds) && rounds >= 1 && rounds <= MAX_ROUNDS)) room.settings.rounds = rounds;
 }
 
 // Returns the clue a player wrote this round (and whether it survived the duplicate check).
@@ -340,7 +342,8 @@ function view(room, pid) {
     qr: room.qr,
     status: room.status,
     round: room.round,
-    maxRounds: lobby ? Math.min(MAX_ROUNDS, pool.length) : room.maxRounds,
+    maxRounds: lobby ? (s.rounds ? Math.min(s.rounds, pool.length) : pool.length) : room.maxRounds,
+    unlimited: s.rounds === 0,
     poolSize: pool ? pool.length : null,
     score: room.score,
     meId: pid,
@@ -371,6 +374,7 @@ function view(room, pid) {
       customCount: s.customWords.length,
       live: s.live,
       aiEngine: s.aiEngine,
+      rounds: s.rounds,
     },
     players: room.players.map((p) => ({
       id: p.id,
@@ -683,7 +687,7 @@ io.on("connection", (socket) => {
         founderId: id,
         hostId: id,
         players: [{ id, name: n, sock: null, connected: true }],
-        settings: { clueSeconds: 0, wordMode: "builtin", category: "all", customWords: [], live: false, aiEngine: "offline" },
+        settings: { clueSeconds: 0, wordMode: "builtin", category: "all", customWords: [], live: true, aiEngine: "offline", rounds: MAX_ROUNDS },
         status: "lobby",
         round: 0,
         maxRounds: MAX_ROUNDS,
@@ -797,7 +801,7 @@ io.on("connection", (socket) => {
     applySettings(room, settings);
     const pool = buildPool(room);
     if (pool.length === 0) return cb({ ok: false, error: "Add some words first, or switch to the built-in list." });
-    room.maxRounds = Math.min(MAX_ROUNDS, pool.length);
+    room.maxRounds = room.settings.rounds ? Math.min(room.settings.rounds, pool.length) : pool.length;
     room.round = 0;
     room.score = 0;
     room.guesserId = null;
@@ -988,6 +992,31 @@ io.on("connection", (socket) => {
     room.poll.votes.set(p.id, yes === true);
     checkPoll(room);
     broadcast(room);
+  });
+
+  // The host can end the game right away, without a vote.
+  socket.on("endNow", (_, cb = () => {}) => {
+    const room = myRoom;
+    if (!room || myPid !== room.hostId) return cb({ ok: false, error: "Only the host can do this." });
+    if (!["clue", "vote", "guess", "reveal"].includes(room.status)) {
+      return cb({ ok: false, error: "The game isn't in progress." });
+    }
+    cb({ ok: true });
+    endGame(room);
+    broadcast(room);
+  });
+
+  // The host adds one more round after the game has finished (or was ended early).
+  socket.on("addRound", (_, cb = () => {}) => {
+    const room = myRoom;
+    if (!room || room.status !== "over" || myPid !== room.hostId) {
+      return cb({ ok: false, error: "Only the host can add a round after the game is over." });
+    }
+    const left = buildPool(room).filter((w) => !room.usedWords.has(w)).length;
+    if (left === 0) return cb({ ok: false, error: "There are no words left." });
+    room.maxRounds = room.round + 1;
+    cb({ ok: true });
+    startRound(room);
   });
 
   socket.on("reset", () => {
