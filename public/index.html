@@ -67,7 +67,8 @@
   #shareModal .card{width:100%;max-width:340px;margin:0;text-align:center}
   #shareUrl{word-break:break-all;font-size:14px;margin:6px 0 10px}
   @media (orientation: portrait){ #showStage .turn-hint{display:block} }
-  @media (orientation: landscape){ #showStage .show-body{flex-direction:column} }
+  #showStage .show-controls{display:flex;flex-direction:column;align-items:center;gap:14px;width:100%}
+  @media (orientation: landscape){ #showStage .show-controls{display:none} }
 </style>
 </head>
 <body>
@@ -99,7 +100,7 @@
       <p class="muted">Work together to help the guesser find the secret word.</p>
       <ol>
         <li>Each round, one player is the guesser. Everyone else sees the secret word.</li>
-        <li>Each clue giver sends one word that hints at the secret word. Only the first word counts.</li>
+        <li>Each clue giver sends one word that hints at the secret word. Only the first word counts. You can change it until everyone locks in.</li>
         <li>Clues that match each other, or the secret word, are crossed out so the guesser can't see them.</li>
         <li>The guesser uses the remaining clues to guess the word. Each correct guess scores a point.</li>
         <li>The guesser rotates each round, for up to 13 rounds.</li>
@@ -125,6 +126,12 @@
         <option value="online">Online: clues stay in the app</option>
         <option value="live">In person: clue givers show their phones</option>
       </select>
+      <label for="aiEngine">AI clue source</label>
+      <select id="aiEngine">
+        <option value="offline">Offline word list</option>
+        <option value="claude">Claude API</option>
+      </select>
+      <div class="muted" id="aiNote"></div>
       <label for="category" id="categoryLabel">Category</label>
       <select id="category"></select>
       <label for="wordMode">Word list</label>
@@ -138,6 +145,10 @@
     </div>
     <div class="card muted center" id="settingsView"></div>
     <button id="shareBtn" class="alt">Show QR code &amp; room code</button>
+    <div class="btn-row">
+      <button id="addAiBtn" class="alt">Add AI player</button>
+      <button id="removeAiBtn" class="alt">Remove AI player</button>
+    </div>
     <button id="startBtn">Start game</button>
     <p class="muted center" id="lobbyHint"></p>
   </section>
@@ -227,6 +238,7 @@
     wordMode: $("wordMode").value,
     customWords: $("customWords").value,
     live: $("playMode").value === "live",
+    aiEngine: $("aiEngine").value,
   });
   const pushSettings = () => socket.emit("settings", currentSettings());
 
@@ -243,9 +255,17 @@
       if (res && !res.ok) showErr(res.error);
     }),
     clueBtn: () => { const t = $("clueIn")?.value.trim(); if (t) socket.emit("clue", { text: t }); },
+    lockClueBtn: () => {
+      const t = $("clueIn")?.value.trim();
+      // Send any edits first. Socket events arrive in order, so the lock sees the latest clue.
+      if (t) socket.emit("clue", { text: t });
+      socket.emit("lockClue", {}, (res) => { if (res && !res.ok) showErr(res.error); });
+    },
     guessBtn: () => { const t = $("guessIn")?.value.trim(); if (t) socket.emit("guess", { text: t }); },
     nextBtn: () => socket.emit("next"),
     skipBtn: () => socket.emit("skip"),
+    addAiBtn: () => socket.emit("addAI", {}, (res) => { if (res && !res.ok) showErr(res.error); }),
+    removeAiBtn: () => socket.emit("removeAI", {}, (res) => { if (res && !res.ok) showErr(res.error); }),
     shareBtn: () => openShare(),
     shareBtnGame: () => openShare(),
     shareClose: () => $("shareModal").classList.add("hidden"),
@@ -257,6 +277,8 @@
     rightBtn: () => socket.emit("judge", { correct: true }),
     wrongBtn: () => socket.emit("judge", { correct: false }),
     skipLive: () => socket.emit("skip"),
+    lateClueBtn: () => sendLateClue("lateClueIn"),
+    lateClueLiveBtn: () => sendLateClue("lateClueInLive"),
     revealBtn: () => socket.emit("reveal"),
     revealLive: () => socket.emit("reveal"),
     newWordBtn: () => {
@@ -283,7 +305,7 @@
     if (b && handlers[b.id]) handlers[b.id]();
   });
   document.body.addEventListener("change", (e) => {
-    if (["clueSecs", "category", "wordMode", "customWords", "playMode"].includes(e.target.id)) pushSettings();
+    if (["clueSecs", "category", "wordMode", "customWords", "playMode", "aiEngine"].includes(e.target.id)) pushSettings();
   });
   document.body.addEventListener("keydown", (e) => {
     if (e.key !== "Enter") return;
@@ -291,7 +313,17 @@
     else if (e.target.id === "guessIn") handlers.guessBtn();
     else if (e.target.id === "code") handlers.joinBtn();
     else if (e.target.id === "newClueIn" || e.target.id === "newClueInLive") sendNewClue(e.target.id);
+    else if (e.target.id === "lateClueIn" || e.target.id === "lateClueInLive") sendLateClue(e.target.id);
   });
+
+  // Sends a clue after the time limit. Only works while the clues are shown to the guesser.
+  function sendLateClue(inputId) {
+    const t = $(inputId)?.value.trim();
+    if (!t) return;
+    socket.emit("lateClue", { text: t }, (res) => {
+      if (!res || !res.ok) return alert(res?.error || "Couldn't send the clue.");
+    });
+  }
 
   // On every (re)connect, try to take our old seat back.
   socket.on("connect", () => {
@@ -383,12 +415,16 @@
     $("qr").src = makeQR(`${location.origin}/?room=${st.code}`) || st.qr;
     $("lobbyCode").textContent = "Room " + st.code;
     $("lobbyPlayers").innerHTML = st.players.map((p) =>
-      `<li><span>${esc(p.name)}${p.id === st.meId ? " (you)" : ""}${p.connected ? "" : " (offline)"}</span>` +
+      `<li><span>${esc(p.name)}${p.ai ? " (AI)" : ""}${p.id === st.meId ? " (you)" : ""}${p.connected ? "" : " (offline)"}</span>` +
       `<span class="muted">${p.id === st.hostId ? "host" : ""}</span></li>`
     ).join("");
 
     const s = st.settings;
     $("settings").classList.toggle("hidden", !st.isHost);
+    $("addAiBtn").classList.toggle("hidden", !st.isHost);
+    $("removeAiBtn").classList.toggle("hidden", !st.isHost);
+    $("aiNote").textContent = s.aiEngine === "claude" && !st.aiClaudeReady
+      ? "No API key is set on this server, so the offline word list will be used." : "";
     $("settingsView").classList.toggle("hidden", st.isHost);
     const catSel = $("category");
     if (catSel.options.length !== st.categories.length) {
@@ -403,6 +439,7 @@
       setIfIdle("category", s.category);
       setIfIdle("wordMode", s.wordMode);
       setIfIdle("playMode", s.live ? "live" : "online");
+      setIfIdle("aiEngine", s.aiEngine);
       setIfIdle("customWords", s.customWords.join("\n"));
     }
     const rounds = `${st.maxRounds} round${st.maxRounds === 1 ? "" : "s"}`;
@@ -438,7 +475,7 @@
     $("scoreInfo").textContent = `Score ${st.score}`;
     $("endGameBtn").classList.toggle("hidden", st.status === "over");
     const me = st.players.find((p) => p.id === st.meId) || {};
-    const key = [st.status, st.round, st.isGuesser, st.isHost, st.waiting, me.submitted, st.word, st.result?.guess, JSON.stringify(st.vote), JSON.stringify(st.myClue)].join("|");
+    const key = [st.status, st.round, st.isGuesser, st.isHost, st.waiting, me.submitted, me.clueLocked, st.clueText, st.word, st.result?.guess, JSON.stringify(st.vote), JSON.stringify(st.myClue)].join("|");
     // Only rebuild the input area when the phase changes, so typing isn't wiped by other players' updates.
     if (key !== phaseKey) {
       phaseKey = key;
@@ -466,7 +503,8 @@
     }
 
     if (st.status === "vote") {
-      if (st.isGuesser) return `<p class="muted">The clue givers are deciding which clues to hide. Wait for them to lock in.</p>${hostSkip}`;
+      if (st.isGuesser) return `<p class="muted">The clue givers are deciding which clues to hide. Wait for them to lock in.</p>
+        <button id="newWordBtn" class="alt">Different word</button>${hostSkip}`;
       const v = st.vote || {};
       if (!v.isVoter) return `<p class="muted">The clue givers are voting on which clues to hide…</p>${hostSkip}`;
       const rows = (st.clues || []).map((c) => {
@@ -474,7 +512,7 @@
         const btn = v.locked
           ? `<span class="muted">${mine ? "marked hide" : "keep"}</span>`
           : `<button class="vote-btn ${mine ? "hide-on" : "alt"}" data-vote="${c.index}" data-hide="${mine ? 0 : 1}">${mine ? "Hiding ✓" : "Hide"}</button>`;
-        return `<div class="vote-row"><span class="${c.valid ? "" : "dup"}">${esc(c.text)}</span>${btn}</div>`;
+        return `<div class="vote-row"><span class="${c.valid ? "" : "dup"}">${esc(c.text)} <span class="muted">${esc(c.name || "")}</span></span>${btn}</div>`;
       }).join("");
       const footer = v.locked
         ? `<p class="muted center">Vote locked. Waiting for ${v.voterCount - v.lockedCount} more clue giver${v.voterCount - v.lockedCount === 1 ? "" : "s"}…</p>`
@@ -485,17 +523,26 @@
     }
 
     if (st.status === "clue") {
-      if (st.isGuesser) return `<p class="muted">You're guessing this round. Waiting for clues…</p>${hostSkip}`;
-      if (me.submitted) return `<p class="muted">Clue sent. Waiting for the others…</p>${hostSkip}`;
+      if (st.isGuesser) return `<p class="muted">You're guessing this round. Waiting for clues…</p>
+        <button id="newWordBtn" class="alt">Different word</button>${hostSkip}`;
+      if (me.clueLocked) return `<p class="muted">Clue locked in. Waiting for the others…</p>${hostSkip}`;
+      const sent = !!me.submitted;
       return `<p class="muted">The secret word is</p>
         <div class="big">${esc(st.word)}</div>
-        <input id="clueIn" maxlength="30" placeholder="One-word clue" autocomplete="off">
-        <button id="clueBtn">Send clue</button>${hostSkip}`;
+        <input id="clueIn" maxlength="30" placeholder="One-word clue" autocomplete="off" value="${esc(st.clueText || "")}">
+        <button id="clueBtn" class="${sent ? "alt" : ""}">${sent ? "Change clue" : "Send clue"}</button>
+        <button id="lockClueBtn">Lock in clue</button>
+        ${sent ? `<p class="muted center">You can change your clue until everyone locks in.</p>` : ""}
+        ${hostSkip}`;
     }
 
     if (st.status === "guess") {
       if (st.isGuesser) {
-        return `<p class="muted">${st.live
+        const aiCards = st.live
+          ? (st.clues || []).filter((c) => c.ai && c.valid)
+              .map((c) => `<p class="muted center">${esc(c.name)} says</p><div class="big">${esc(c.text)}</div>`).join("")
+          : "";
+        return `${aiCards}<p class="muted">${st.live
             ? "Look at the clues on the clue givers' phones. Type your guess, or tap Right or Wrong."
             : "Use the clues to guess the word."}</p>
           <input id="guessIn" maxlength="30" placeholder="Your guess" autocomplete="off">
@@ -505,6 +552,11 @@
           ${hostSkip}`;
       }
       const mc = st.myClue;
+      // Missed the clue time limit: let the player send a clue while the clues are shown.
+      if (!mc) return `<p class="muted">Waiting for ${esc(st.guesserName)} to guess…</p>
+        <p class="center">You didn't send a clue in time. You can still send one now. It won't go to a vote.</p>
+        <input id="lateClueIn" maxlength="30" placeholder="One-word clue" autocomplete="off">
+        <button id="lateClueBtn" class="alt">Send late clue</button>${hostSkip}`;
       const note = mc && mc.canReveal
         ? `<p class="center">Your clue matches another clue, so it was voted hidden.</p><button id="revealBtn" class="alt">Reveal my clue anyway</button>`
         : mc && mc.canChange
@@ -544,7 +596,9 @@
     if (shown.length === 0) { box.innerHTML = `<div class="muted">No clues this round.</div>`; return; }
     box.innerHTML = `<div class="muted">Clues</div><ul>` +
       shown.map((c) => {
-        const tag = c.hidden ? "hidden by vote" : c.revealed ? "duplicate, shown anyway" : c.valid ? esc(c.name || "") : "duplicate";
+        const who = c.name ? esc(c.name) : "";
+        const status = c.hidden ? "hidden by vote" : c.revealed ? "duplicate, shown anyway" : c.valid ? "" : "duplicate";
+        const tag = [who, status].filter(Boolean).join(" · ");
         return `<li class="${c.valid && !c.hidden ? "" : "dup"}"><span>${esc(c.text)}</span>` +
           `<span class="muted">${tag}</span></li>`;
       }).join("") + `</ul>`;
@@ -556,8 +610,8 @@
       if (p.id === st.guesserId) tag = "guessing";
       else if (p.waiting && st.status !== "lobby") tag = "joins next round";
       else if (st.status === "vote" && p.submitted) tag = p.locked ? "vote locked" : "voting…";
-      else if (st.status === "clue") tag = p.submitted ? "clue sent" : "writing clue…";
-      const suffix = (p.id === st.meId ? " (you)" : "") + (p.connected ? "" : " (offline)");
+      else if (st.status === "clue") tag = p.clueLocked ? "clue locked" : p.submitted ? "clue sent" : "writing clue…";
+      const suffix = (p.ai ? " (AI)" : "") + (p.id === st.meId ? " (you)" : "") + (p.connected ? "" : " (offline)");
       return `<li><span>${esc(p.name)}${suffix}</span><span class="muted">${tag}</span></li>`;
     }).join("");
   }
@@ -575,18 +629,25 @@
       : c.hidden ? "Voted out: the guesser won't see this clue."
       : !c.valid ? "Crossed out: it matches another clue or the secret word." : "";
     const reveal = c && c.canReveal ? `<button id="revealLive" class="alt">Show it anyway</button>` : "";
-    const body = !c
-      ? `<div class="show-note">You didn't send a clue this round.</div>`
-      : `<div class="show-clue ${out ? "struck" : ""}">${esc(c.text)}</div>` +
-        (note ? `<div class="show-note">${note}</div>` : "") + reveal;
-    const change = c && c.canChange
-      ? `<input id="newClueInLive" maxlength="30" placeholder="A different one-word clue" autocomplete="off"><button id="changeClueLiveBtn" class="alt">Show different clue</button>`
+    // The clue word is the only thing shown when the phone is sideways. The controls
+    // (replace, reveal, skip, notes) are shown only in portrait, via CSS.
+    const clueHTML = c ? `<div class="show-clue ${out ? "struck" : ""}">${esc(c.text)}</div>` : "";
+    const lateHTML = !c
+      ? `<div class="show-note">You didn't send a clue in time. Type one now and show it to the guesser.</div>
+        <input id="lateClueInLive" maxlength="30" placeholder="One-word clue" autocomplete="off">
+        <button id="lateClueLiveBtn" class="alt">Send late clue</button>`
       : "";
+    const controlsHTML = lateHTML + (c && note ? `<div class="show-note">${note}</div>` : "") + reveal +
+      (c && c.canChange
+        ? `<input id="newClueInLive" maxlength="30" placeholder="A different one-word clue" autocomplete="off"><button id="changeClueLiveBtn" class="alt">Show different clue</button>`
+        : "") +
+      (st.isHost ? `<button id="skipLive" class="alt">Skip round</button>` : "");
     const typed = $("newClueInLive")?.value || "";
-    const skip = st.isHost ? `<button id="skipLive" class="alt">Skip round</button>` : "";
+    const typedLate = $("lateClueInLive")?.value || "";
     el.innerHTML = `<div class="turn-hint">Turn your phone sideways to show your clue</div>
-      <div class="show-body">${body}${change}${skip}</div>`;
+      <div class="show-body">${clueHTML}<div class="show-controls">${controlsHTML}</div></div>`;
     if ($("newClueInLive")) $("newClueInLive").value = typed;
+    if ($("lateClueInLive")) $("lateClueInLive").value = typedLate;
     fitClue();
   }
 
