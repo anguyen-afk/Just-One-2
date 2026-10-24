@@ -103,7 +103,7 @@
         <li>Each clue giver sends one word that hints at the secret word. Only the first word counts. You can change it until everyone locks in.</li>
         <li>Clues that match each other, or the secret word, are crossed out so the guesser can't see them.</li>
         <li>The guesser uses the remaining clues to guess the word. Each correct guess scores a point.</li>
-        <li>The guesser rotates each round, for up to 13 rounds.</li>
+        <li>The guesser rotates each round.</li>
       </ol>
       <p class="muted" id="howtoRounds"></p>
       <p class="muted" id="howtoMode"></p>
@@ -121,10 +121,27 @@
         <option value="60">60 seconds</option>
         <option value="90">90 seconds</option>
       </select>
+      <label for="rounds">Number of rounds</label>
+      <select id="rounds">
+        <option value="0">No limit</option>
+        <option value="1">1</option>
+        <option value="2">2</option>
+        <option value="3">3</option>
+        <option value="4">4</option>
+        <option value="5">5</option>
+        <option value="6">6</option>
+        <option value="7">7</option>
+        <option value="8">8</option>
+        <option value="9">9</option>
+        <option value="10">10</option>
+        <option value="11">11</option>
+        <option value="12">12</option>
+        <option value="13">13</option>
+      </select>
       <label for="playMode">Play mode</label>
       <select id="playMode">
         <option value="online">Online: clues stay in the app</option>
-        <option value="live">In person: clue givers show their phones</option>
+        <option value="live" selected>In person: clue givers show their phones</option>
       </select>
       <label for="aiEngine">AI clue source</label>
       <select id="aiEngine">
@@ -239,6 +256,7 @@
     customWords: $("customWords").value,
     live: $("playMode").value === "live",
     aiEngine: $("aiEngine").value,
+    rounds: Number($("rounds").value),
   });
   const pushSettings = () => socket.emit("settings", currentSettings());
 
@@ -269,7 +287,10 @@
     shareBtn: () => openShare(),
     shareBtnGame: () => openShare(),
     shareClose: () => $("shareModal").classList.add("hidden"),
-    endGameBtn: () => proposeToPlayers("end"),
+    endGameBtn: () => (st && st.isHost
+      ? socket.emit("endNow", {}, (res) => { if (res && !res.ok) showErr(res.error); })
+      : proposeToPlayers("end")),
+    addRoundBtn: () => socket.emit("addRound", {}, (res) => { if (res && !res.ok) showErr(res.error); }),
     newGameBtn: () => proposeToPlayers("new"),
     pollYes: () => socket.emit("pollVote", { yes: true }),
     pollNo: () => socket.emit("pollVote", { yes: false }),
@@ -305,7 +326,7 @@
     if (b && handlers[b.id]) handlers[b.id]();
   });
   document.body.addEventListener("change", (e) => {
-    if (["clueSecs", "category", "wordMode", "customWords", "playMode", "aiEngine"].includes(e.target.id)) pushSettings();
+    if (["clueSecs", "category", "wordMode", "customWords", "playMode", "aiEngine", "rounds"].includes(e.target.id)) pushSettings();
   });
   document.body.addEventListener("keydown", (e) => {
     if (e.key !== "Enter") return;
@@ -440,9 +461,10 @@
       setIfIdle("wordMode", s.wordMode);
       setIfIdle("playMode", s.live ? "live" : "online");
       setIfIdle("aiEngine", s.aiEngine);
+      setIfIdle("rounds", String(s.rounds));
       setIfIdle("customWords", s.customWords.join("\n"));
     }
-    const rounds = `${st.maxRounds} round${st.maxRounds === 1 ? "" : "s"}`;
+    const rounds = st.unlimited ? "no round limit" : `${st.maxRounds} round${st.maxRounds === 1 ? "" : "s"}`;
     $("wordCount").textContent = `${st.poolSize} words available · ${rounds}`;
     const modeTxt = { builtin: "built-in words", custom: "host's own words", both: "built-in + host's words" }[s.wordMode];
     const catLabel = st.categories.find((c) => c.key === s.category)?.label || "All words";
@@ -451,7 +473,9 @@
       `${s.clueSeconds ? s.clueSeconds + "s clue timer" : "No clue timer"} · ${catTxt}${modeTxt} · ${s.live ? "in person" : "online"} · ${rounds}`;
 
     // How-to-play card: keep the instructions in step with the current settings.
-    $("howtoRounds").textContent = `This game has ${st.maxRounds} round${st.maxRounds === 1 ? "" : "s"}.`;
+    $("howtoRounds").textContent = st.unlimited
+      ? "This game has no round limit. The host decides when it ends."
+      : `This game has ${st.maxRounds} round${st.maxRounds === 1 ? "" : "s"}.`;
     $("howtoMode").textContent = s.live
       ? "In person: clue givers show their clues on their phone screens, so the guesser sees them in the room."
       : "Online: clues stay in the app, and the guesser reads them there.";
@@ -471,9 +495,10 @@
   }
 
   function renderGame() {
-    $("roundInfo").textContent = `Round ${st.round} of ${st.maxRounds}`;
+    $("roundInfo").textContent = st.unlimited ? `Round ${st.round}` : `Round ${st.round} of ${st.maxRounds}`;
     $("scoreInfo").textContent = `Score ${st.score}`;
     $("endGameBtn").classList.toggle("hidden", st.status === "over");
+    $("endGameBtn").textContent = st.isHost ? "End game now" : "End game";
     const me = st.players.find((p) => p.id === st.meId) || {};
     const key = [st.status, st.round, st.isGuesser, st.isHost, st.waiting, me.submitted, me.clueLocked, st.clueText, st.word, st.result?.guess, JSON.stringify(st.vote), JSON.stringify(st.myClue)].join("|");
     // Only rebuild the input area when the phase changes, so typing isn't wiped by other players' updates.
@@ -493,8 +518,8 @@
       const r = st.score / st.maxRounds;
       const msg = r >= 1 ? "Perfect score!" : r >= 0.85 ? "Incredible!" : r >= 0.6 ? "Great teamwork." : r >= 0.3 ? "Not bad." : "Keep practicing.";
       return `<div class="big">Game over</div>` +
-        `<p class="center">Final score: ${st.score} / ${st.maxRounds}<br>${msg}</p>` +
-        (st.isHost ? `<button id="resetBtn">Back to lobby</button>`
+        `<p class="center">Final score: ${st.unlimited ? st.score : `${st.score} / ${st.maxRounds}`}<br>${msg}</p>` +
+        (st.isHost ? `<button id="addRoundBtn">Add another round</button><button id="resetBtn" class="alt">Back to lobby</button>`
                    : `<p class="muted center">Waiting for the host…</p>`);
     }
 
