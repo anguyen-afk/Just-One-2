@@ -494,7 +494,6 @@ function scheduleAIClues(room) {
       if (room.clueLocked.has(p.id)) return;
       room.clues.set(p.id, text);
       room.clueLocked.add(p.id);
-      finishClues(room);
       broadcast(room);
     });
   }
@@ -550,12 +549,10 @@ function startClueTimer(room) {
   }, secs * 1000 + CLUE_GRACE_MS);
 }
 
-// Runs when every active clue-giver has submitted, or (force) when time is up.
+// Ends the clue phase when time is up (or when forced, e.g. by the host).
 function finishClues(room, force = false) {
   if (room.status !== "clue") return;
-  const g = givers(room);
-  const allIn = g.length > 0 && g.every((p) => room.clueLocked.has(p.id));
-  if (!allIn && !force) return;
+  if (!force) return;
 
   clearTimeout(room.timer);
   room.deadline = null;
@@ -653,7 +650,6 @@ function afterDrop(room) {
   }
   const host = find(room, room.hostId);
   if (!host || !host.connected) room.hostId = humans[0].id;
-  finishClues(room);
   checkVotes(room);
   checkPoll(room);
   broadcast(room);
@@ -822,7 +818,7 @@ io.on("connection", (socket) => {
     broadcast(room);
   });
 
-  // A clue giver locks in their clue. The round moves on once everyone has locked in.
+  // A clue giver locks in their clue. Locking only stops further edits; the round still ends on the timer.
   socket.on("lockClue", (_, cb = () => {}) => {
     const room = myRoom;
     const p = room && find(room, myPid);
@@ -832,7 +828,6 @@ io.on("connection", (socket) => {
     if (!room.clues.has(p.id)) return cb({ ok: false, error: "Send a clue first." });
     room.clueLocked.add(p.id);
     cb({ ok: true });
-    finishClues(room);
     broadcast(room);
   });
 
@@ -940,6 +935,7 @@ io.on("connection", (socket) => {
   });
 
   // The guesser can swap the secret word during the clue, vote or guess stage. It isn't a skipped round.
+  // The guesser swaps the secret word for a random unused one. The guesser never sees the new word.
   socket.on("newWord", (_, cb = () => {}) => {
     const room = myRoom;
     if (!room || !["clue", "vote", "guess"].includes(room.status) || myPid !== room.guesserId) return cb({ ok: false, error: "Only the guesser can do this now." });
