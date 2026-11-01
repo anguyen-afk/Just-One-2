@@ -15,6 +15,13 @@
   label{display:block;font-size:14px;color:#555;margin-top:8px}
   button{width:100%;padding:12px;font-size:17px;border:0;border-radius:10px;background:#2d6cdf;color:#fff;margin:6px 0;cursor:pointer}
   button.alt{background:#777}
+  /* Guesser controls: each action gets its own color */
+  button.good{background:#27ae60}
+  button.bad{background:#c0392b}
+  button.guess{background:#16a085}
+  button.swap{background:#e67e22}
+  input#guessIn{border-color:#16a085}
+  input#guessIn:focus{outline:none;border-color:#0e6655;background:#e8f8f5}
   button.link{background:none;color:#777;font-size:14px;text-decoration:underline;width:auto;display:block;margin:12px auto}
   button:disabled{background:#bbb;cursor:default}
   hr{border:0;border-top:1px solid #ddd;margin:14px 0}
@@ -100,7 +107,7 @@
       <p class="muted">Work together to help the guesser find the secret word.</p>
       <ol>
         <li>Each round, one player is the guesser. Everyone else sees the secret word.</li>
-        <li>Each clue giver sends one word that hints at the secret word. Only the first word counts. You can change it until everyone locks in.</li>
+        <li>Each clue giver sends one word that hints at the secret word. Only the first word counts. You can change it until time runs out.</li>
         <li>Clues that match each other, or the secret word, are crossed out so the guesser can't see them.</li>
         <li>The guesser uses the remaining clues to guess the word. Each correct guess scores a point.</li>
         <li>The guesser rotates each round.</li>
@@ -529,7 +536,7 @@
 
     if (st.status === "vote") {
       if (st.isGuesser) return `<p class="muted">The clue givers are deciding which clues to hide. Wait for them to lock in.</p>
-        <button id="newWordBtn" class="alt">Different word</button>${hostSkip}`;
+        <button id="newWordBtn" class="swap">Different word</button>${hostSkip}`;
       const v = st.vote || {};
       if (!v.isVoter) return `<p class="muted">The clue givers are voting on which clues to hide…</p>${hostSkip}`;
       const rows = (st.clues || []).map((c) => {
@@ -549,15 +556,15 @@
 
     if (st.status === "clue") {
       if (st.isGuesser) return `<p class="muted">You're guessing this round. Waiting for clues…</p>
-        <button id="newWordBtn" class="alt">Different word</button>${hostSkip}`;
-      if (me.clueLocked) return `<p class="muted">Clue locked in. Waiting for the others…</p>${hostSkip}`;
+        <button id="newWordBtn" class="swap">Different word</button>${hostSkip}`;
+      if (me.clueLocked) return `<p class="muted">Clue locked in. Waiting for the timer…</p>${hostSkip}`;
       const sent = !!me.submitted;
       return `<p class="muted">The secret word is</p>
         <div class="big">${esc(st.word)}</div>
         <input id="clueIn" maxlength="30" placeholder="One-word clue" autocomplete="off" value="${esc(st.clueText || "")}">
         <button id="clueBtn" class="${sent ? "alt" : ""}">${sent ? "Change clue" : "Send clue"}</button>
         <button id="lockClueBtn">Lock in clue</button>
-        ${sent ? `<p class="muted center">You can change your clue until everyone locks in.</p>` : ""}
+        ${sent ? `<p class="muted center">You can change your clue until time runs out.</p>` : ""}
         ${hostSkip}`;
     }
 
@@ -571,9 +578,9 @@
             ? "Look at the clues on the clue givers' phones. Type your guess, or tap Right or Wrong."
             : "Use the clues to guess the word."}</p>
           <input id="guessIn" maxlength="30" placeholder="Your guess" autocomplete="off">
-          <button id="guessBtn">Lock in guess</button>
+          <button id="guessBtn" class="guess">Lock in guess</button>
           ${st.live ? `<button id="rightBtn" class="good">Right ✓</button><button id="wrongBtn" class="bad">Wrong ✗</button>` : ""}
-          <button id="newWordBtn" class="alt">Different word</button>
+          <button id="newWordBtn" class="swap">Different word</button>
           ${hostSkip}`;
       }
       const mc = st.myClue;
