@@ -419,6 +419,42 @@ const ASSOCIATIONS = {
   Rain: ["Puddle", "Storm", "Cloudy"], Snow: ["Winter", "Flake", "Cold"], Penguin: ["Antarctica", "Ice", "Tux"],
   Elephant: ["Trunk", "Ivory", "Safari"], Telescope: ["Stars", "Lens", "Astronomy"], Vampire: ["Bite", "Blood", "Dracula"],
   Robot: ["Metal", "Circuit", "Android"], Skeleton: ["Bones", "Spine", "Halloween"], Bicycle: ["Pedal", "Wheels", "Bike"],
+  Anchor: ["Ship", "Sea", "Chain"], Balloon: ["Helium", "Party", "String"], Candle: ["Wax", "Flame", "Birthday"],
+  Desert: ["Sand", "Camel", "Dune"], Honey: ["Bee", "Hive", "Sweet"], Iceberg: ["Titanic", "Arctic", "Ocean"],
+  Ladder: ["Rungs", "Climb", "Step"], Mountain: ["Peak", "Summit", "Climb"], Octopus: ["Tentacles", "Ink", "Squid"],
+  Queen: ["Crown", "Throne", "Royal"], Rainbow: ["Colors", "Rain", "Prism"], Sandwich: ["Bread", "Lunch", "Deli"],
+  Unicorn: ["Horn", "Myth", "Magic"], Violin: ["Bow", "Strings", "Orchestra"], Waterfall: ["Cascade", "Falls", "River"],
+  Bakery: ["Bread", "Oven", "Pastry"], Compass: ["North", "Direction", "Needle"], Dolphin: ["Ocean", "Flipper", "Smart"],
+  Garden: ["Flowers", "Soil", "Hose"], Library: ["Books", "Shelf", "Quiet"], Mushroom: ["Fungus", "Forest", "Spore"],
+  Pyramid: ["Egypt", "Tomb", "Sphinx"], Windmill: ["Blades", "Wind", "Farm"], Satellite: ["Orbit", "Dish", "Space"],
+  Lighthouse: ["Beacon", "Coast", "Ship"], Carnival: ["Rides", "Circus", "Fair"], Submarine: ["Sonar", "Navy", "Periscope"],
+  Scarecrow: ["Field", "Crow", "Straw"], Thunder: ["Lightning", "Storm", "Boom"], Monkey: ["Banana", "Jungle", "Primate"],
+  Tiger: ["Stripes", "Jungle", "Cat"], Giraffe: ["Neck", "Savanna", "Spots"], Koala: ["Eucalyptus", "Australia", "Marsupial"],
+  Panda: ["Bamboo", "China", "Black"], Shark: ["Fin", "Jaws", "Teeth"], Whale: ["Ocean", "Blue", "Blowhole"],
+  Owl: ["Night", "Wisdom", "Hoot"], Eagle: ["Bird", "Talons", "Wings"], Spider: ["Web", "Eight", "Legs"],
+  Butterfly: ["Wings", "Caterpillar", "Cocoon"], Bee: ["Honey", "Hive", "Sting"], Turtle: ["Shell", "Slow", "Sea"],
+  Frog: ["Pond", "Croak", "Lily"], Cactus: ["Desert", "Spines", "Prickly"], Pine: ["Tree", "Needles", "Cone"],
+  Lake: ["Water", "Shore", "Boat"], Beach: ["Sand", "Ocean", "Sunscreen"], Hotel: ["Room", "Lobby", "Bed"],
+  Museum: ["Art", "Exhibit", "History"], Stadium: ["Crowd", "Field", "Arena"], Market: ["Fruit", "Stall", "Shopping"],
+  Subway: ["Metro", "Underground", "Train"], Tent: ["Camping", "Canvas", "Stakes"], Suitcase: ["Luggage", "Travel", "Wheels"],
+  Ticket: ["Admission", "Seat", "Stub"], Temple: ["Shrine", "Worship", "Monk"], Soccer: ["Goal", "Ball", "Kick"],
+  Baseball: ["Bat", "Diamond", "Inning"], Basketball: ["Hoop", "Dunk", "Court"], Tennis: ["Racket", "Court", "Serve"],
+  Golf: ["Club", "Course", "Putt"], Chess: ["Checkmate", "King", "Board"], Poker: ["Chips", "Bluff", "Cards"],
+  Trophy: ["Award", "Cup", "Winner"], Medal: ["Gold", "Ribbon", "Olympics"], Drum: ["Beat", "Snare", "Rhythm"],
+  Trumpet: ["Brass", "Horn", "Jazz"], Flute: ["Wind", "Pipe", "Silver"], Harp: ["Strings", "Angel", "Lyre"],
+  Saxophone: ["Jazz", "Brass", "Reed"], Microphone: ["Voice", "Singer", "Stage"], Vinyl: ["Record", "Turntable", "Album"],
+  Orchestra: ["Conductor", "Symphony", "Violin"], Opera: ["Aria", "Singer", "Stage"], Jazz: ["Swing", "Blues", "Saxophone"],
+  Karaoke: ["Sing", "Lyrics", "Microphone"], Atom: ["Nucleus", "Electron", "Matter"], Gravity: ["Fall", "Newton", "Weight"],
+  Laser: ["Light", "Beam", "Focus"], Planet: ["Orbit", "Earth", "Solar"], Moon: ["Lunar", "Crater", "Night"],
+  Galaxy: ["Stars", "Milky", "Spiral"], Comet: ["Tail", "Ice", "Orbit"], Asteroid: ["Rock", "Belt", "Impact"],
+  Dinosaur: ["Fossil", "Extinct", "Jurassic"], Virus: ["Infection", "Flu", "Sick"], Battery: ["Power", "Charge", "Cell"],
+  Hammer: ["Nail", "Tool", "Swing"], Toaster: ["Bread", "Breakfast", "Crumbs"], Fridge: ["Cold", "Milk", "Kitchen"],
+  Pillow: ["Sleep", "Feathers", "Bed"], Bathtub: ["Bubbles", "Soap", "Bath"], Faucet: ["Water", "Tap", "Sink"],
+  Umpire: ["Strike", "Referee", "Call"], Javelin: ["Throw", "Spear", "Track"], Snowboard: ["Slope", "Board", "Mountain"],
+  Pancake: ["Syrup", "Breakfast", "Flip"], Burrito: ["Wrap", "Beans", "Tortilla"], Ramen: ["Noodles", "Broth", "Japan"],
+  Cookie: ["Milk", "Chocolate", "Crumb"], Donut: ["Glaze", "Sprinkles", "Hole"], Popcorn: ["Movie", "Butter", "Kernel"],
+  Lemon: ["Sour", "Yellow", "Zest"], Banana: ["Peel", "Yellow", "Monkey"], Cheese: ["Milk", "Cheddar", "Melt"],
+  Pickle: ["Cucumber", "Vinegar", "Brine"], Bacon: ["Breakfast", "Pork", "Crispy"], Cocoa: ["Chocolate", "Hot", "Bean"],
 };
 
 // Picks an offline clue: a listed association first, then a word from the same category,
@@ -437,7 +473,7 @@ function offlineClue(room, secret) {
 }
 
 // Asks Claude for one clue word. Throws on network, timeout or HTTP errors.
-async function askClaude(secret) {
+async function askClaude(secret, taken = []) {
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
@@ -451,8 +487,12 @@ async function askClaude(secret) {
       messages: [{
         role: "user",
         content: `You are playing the party game Just One. The secret word is "${secret}". ` +
-          `Give exactly one English word that helps a teammate guess the secret word. ` +
+          `Give exactly one English word that a teammate would instantly link to "${secret}": ` +
+          `something it is commonly paired with, a part of it, somewhere or something you find it with, ` +
+          `or a well-known trait of it. Good examples: Apple -> Orchard, Doctor -> Hospital, Snow -> Flake. ` +
+          `Bad examples: a synonym, a rhyme, a broad category word like "Thing" or "Object". ` +
           `Do not use the secret word or any form of it. Do not use spaces, hyphens or punctuation. ` +
+          (taken.length ? `These words are already taken, so do not use them: ${taken.join(", ")}. ` : "") +
           `Reply with the single word only.`,
       }],
     }),
@@ -471,10 +511,11 @@ function validAIWord(word, secret) {
 
 async function makeAIClue(room, secret) {
   if (room.settings.aiEngine === "claude" && process.env.ANTHROPIC_API_KEY) {
+    const taken = [...room.clues.values()];
     for (let i = 0; i < AI_TRIES; i++) {
       try {
-        const word = await askClaude(secret);
-        if (validAIWord(word, secret)) return word;
+        const word = await askClaude(secret, taken);
+        if (validAIWord(word, secret) && !taken.some((t) => sameIdea(norm(word), norm(t)))) return word;
       } catch (e) {
         break; // API unavailable: use the offline list instead
       }
@@ -492,6 +533,9 @@ function scheduleAIClues(room) {
     makeAIClue(room, word).then((text) => {
       if (room.aiToken !== token || room.status !== "clue" || room.word !== word) return;
       if (room.clueLocked.has(p.id)) return;
+      // Several AI players can finish at once, so re-check against clues that arrived meanwhile.
+      const taken = [...room.clues.values()].map(norm);
+      if (taken.some((t) => sameIdea(norm(text), t))) text = offlineClue(room, word);
       room.clues.set(p.id, text);
       room.clueLocked.add(p.id);
       broadcast(room);
